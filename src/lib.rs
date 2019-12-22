@@ -32,6 +32,7 @@ pub use crate::header::{GnuHeader, GnuSparseHeader, Header, HeaderMode, OldHeade
 pub use crate::pax::{PaxExtension, PaxExtensions};
 
 mod archive;
+pub mod async_tar;
 mod builder;
 mod entry;
 mod entry_type;
