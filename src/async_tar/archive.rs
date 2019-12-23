@@ -284,6 +284,7 @@ impl<'a> EntriesFields<'a> {
             unpack_xattrs: self.archive.inner.unpack_xattrs,
             preserve_permissions: self.archive.inner.preserve_permissions,
             preserve_mtime: self.archive.inner.preserve_mtime,
+            read_state: None,
         };
 
         // Store where the next entry is, rounding up by 512 bytes (the size of
@@ -360,11 +361,6 @@ impl<'a> EntriesFields<'a> {
             self.parse_sparse_header(&mut fields).await?;
             return Ok(Some(fields.into_entry()));
         }
-
-        Err(other(
-            "members found describing a future member \
-             but no future member found",
-        ))
     }
 
     async fn parse_sparse_header(&mut self, entry: &mut EntryFields<'a>) -> io::Result<()> {

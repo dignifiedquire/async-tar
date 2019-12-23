@@ -48,6 +48,8 @@ pub struct EntryFields<'a> {
     pub unpack_xattrs: bool,
     pub preserve_permissions: bool,
     pub preserve_mtime: bool,
+    #[pin]
+    pub(crate) read_state: Option<EntryIo<'a>>,
 }
 
 #[pin_project]
@@ -789,16 +791,31 @@ impl<'a> Read for EntryFields<'a> {
         cx: &mut Context<'_>,
         into: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        let this = self.project();
+        let mut this = self.project();
         loop {
-            if let Some(io) = this.data.get_mut().get_mut(0) {
-                match async_std::task::ready!(Pin::new(io).poll_read(cx, into)) {
-                    Ok(0) => {
-                        // ufff
-                        // this.data.remove(0);
-                        unimplemented!()
+            if this.read_state.is_none() {
+                if this.data.as_ref().is_empty() {
+                    *this.read_state = None;
+                } else {
+                    *this.read_state = Some(this.data.get_mut().remove(0));
+                }
+            }
+
+            let mut read_state = (&mut *this.read_state).take();
+
+            if let Some(ref mut io) = read_state {
+                match Pin::new(io).poll_read(cx, into) {
+                    Poll::Ready(Ok(0)) => {
+                        return Poll::Ready(Ok(0));
                     }
-                    val => return Poll::Ready(val),
+                    Poll::Ready(val) => {
+                        *this.read_state = read_state;
+                        return Poll::Ready(val);
+                    }
+                    Poll::Pending => {
+                        *this.read_state = read_state;
+                        return Poll::Pending;
+                    }
                 }
             } else {
                 return Poll::Ready(Ok(0));
