@@ -38,7 +38,7 @@ pub struct Entries<'a, R: 'a + Read> {
 }
 
 struct EntriesFields<'a> {
-    archive: &'a Archive<dyn Read + 'a>,
+    archive: &'a Archive<dyn Read + Unpin + 'a>,
     next: u64,
     done: bool,
     raw: bool,
