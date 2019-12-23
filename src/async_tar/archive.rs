@@ -356,6 +356,7 @@ impl<'a> EntriesFields<'a> {
             fields.long_pathname = gnu_longname;
             fields.long_linkname = gnu_longlink;
             fields.pax_extensions = pax_extensions;
+
             self.parse_sparse_header(&mut fields).await?;
             return Ok(Some(fields.into_entry()));
         }
@@ -504,12 +505,11 @@ impl<'a> Stream for EntriesFields<'a> {
 
 impl<'a, R: ?Sized + Read + Unpin> Read for &'a ArchiveInner<R> {
     fn poll_read(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         into: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        let this_0: Pin<&mut ArchiveInner<R>> = Pin::new(&mut *self);
-        let this = this_0.project();
+        let this = Pin::new(&**self).project_ref();
         let mut r = this.obj.as_ref().borrow_mut();
 
         let res = async_std::task::ready!(pin_cell::PinMut::as_mut(&mut r).poll_read(cx, into));
