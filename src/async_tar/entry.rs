@@ -1,13 +1,13 @@
 use std::borrow::Cow;
 use std::cmp;
 use std::marker;
-use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 
 use async_std::fs;
 use async_std::fs::OpenOptions;
 use async_std::io::prelude::*;
 use async_std::io::{self, Error, ErrorKind, SeekFrom};
+use async_std::path::{Component, Path, PathBuf};
 use async_std::task::{Context, Poll};
 use pin_project::{pin_project, project};
 
@@ -291,7 +291,7 @@ impl<R: Read + Unpin> EntryFields<R> {
         self.read_to_end(&mut v).await.map(|_| v)
     }
 
-    fn path(&self) -> io::Result<Cow<Path>> {
+    fn path(&self) -> io::Result<Cow<'_, Path>> {
         bytes2path(self.path_bytes())
     }
 
@@ -408,13 +408,13 @@ impl<R: Read + Unpin> EntryFields<R> {
             None => return Ok(false),
         };
 
-        if parent.symlink_metadata().is_err() {
+        if parent.symlink_metadata().await.is_err() {
             fs::create_dir_all(&parent).await.map_err(|e| {
                 TarError::new(&format!("failed to create `{}`", parent.display()), e)
             })?;
         }
 
-        let canon_target = self.validate_inside_dst(&dst, parent)?;
+        let canon_target = self.validate_inside_dst(&dst, parent).await?;
 
         self.unpack(Some(&canon_target), &file_dst)
             .await
@@ -486,7 +486,7 @@ impl<R: Read + Unpin> EntryFields<R> {
                     // so we need to validate at this time.
                     Some(ref p) => {
                         let link_src = p.join(src);
-                        self.validate_inside_dst(p, &link_src)?;
+                        self.validate_inside_dst(p, &link_src).await?;
                         link_src
                     }
                     None => src.into_owned(),
@@ -758,15 +758,15 @@ impl<R: Read + Unpin> EntryFields<R> {
         }
     }
 
-    fn validate_inside_dst(&self, dst: &Path, file_dst: &Path) -> io::Result<PathBuf> {
+    async fn validate_inside_dst(&self, dst: &Path, file_dst: &Path) -> io::Result<PathBuf> {
         // Abort if target (canonical) parent is outside of `dst`
-        let canon_parent = file_dst.canonicalize().map_err(|err| {
+        let canon_parent = file_dst.canonicalize().await.map_err(|err| {
             Error::new(
                 err.kind(),
                 format!("{} while canonicalizing {}", err, file_dst.display()),
             )
         })?;
-        let canon_target = dst.canonicalize().map_err(|err| {
+        let canon_target = dst.canonicalize().await.map_err(|err| {
             Error::new(
                 err.kind(),
                 format!("{} while canonicalizing {}", err, dst.display()),

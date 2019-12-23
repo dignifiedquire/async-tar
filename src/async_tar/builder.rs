@@ -1,24 +1,25 @@
 use std::borrow::Cow;
-use std::fs;
-use std::io;
-use std::io::prelude::*;
-use std::path::Path;
 
-use crate::header::{bytes2path, path2bytes, HeaderMode};
-use crate::{other, EntryType, Header};
+use async_std::fs;
+use async_std::io::{self, Read, Write};
+use async_std::path::Path;
+use async_std::prelude::*;
+
+use crate::async_tar::header::{bytes2path, path2bytes, HeaderMode};
+use crate::async_tar::{other, EntryType, Header};
 
 /// A structure for building archives
 ///
 /// This structure has methods for building up an archive from scratch into any
 /// arbitrary writer.
-pub struct Builder<W: Write> {
+pub struct Builder<W: Write + Unpin> {
     mode: HeaderMode,
     follow: bool,
     finished: bool,
     obj: Option<W>,
 }
 
-impl<W: Write> Builder<W> {
+impl<W: Write + Unpin> Builder<W> {
     /// Create a new archive builder with the underlying object as the
     /// destination of all data written. The builder will use
     /// `HeaderMode::Complete` by default.
@@ -64,9 +65,9 @@ impl<W: Write> Builder<W> {
     /// This function will finish writing the archive if the `finish` function
     /// hasn't yet been called, returning any I/O error which happens during
     /// that operation.
-    pub fn into_inner(mut self) -> io::Result<W> {
+    pub async fn into_inner(mut self) -> io::Result<W> {
         if !self.finished {
-            self.finish()?;
+            self.finish().await?;
         }
         Ok(self.obj.take().unwrap())
     }
@@ -107,8 +108,14 @@ impl<W: Write> Builder<W> {
     /// ar.append(&header, data).unwrap();
     /// let data = ar.into_inner().unwrap();
     /// ```
-    pub fn append<R: Read>(&mut self, header: &Header, mut data: R) -> io::Result<()> {
-        append(self.get_mut(), header, &mut data)
+    pub async fn append<R: Read + Unpin>(
+        &mut self,
+        header: &Header,
+        mut data: R,
+    ) -> io::Result<()> {
+        append(self.get_mut(), header, &mut data).await?;
+
+        Ok(())
     }
 
     /// Adds a new entry to this archive with the specified path.
@@ -151,15 +158,17 @@ impl<W: Write> Builder<W> {
     /// ar.append_data(&mut header, "really/long/path/to/foo", data).unwrap();
     /// let data = ar.into_inner().unwrap();
     /// ```
-    pub fn append_data<P: AsRef<Path>, R: Read>(
+    pub async fn append_data<P: AsRef<Path>, R: Read + Unpin>(
         &mut self,
         header: &mut Header,
         path: P,
         data: R,
     ) -> io::Result<()> {
-        prepare_header_path(self.get_mut(), header, path.as_ref())?;
+        prepare_header_path(self.get_mut(), header, path.as_ref()).await?;
         header.set_cksum();
-        self.append(&header, data)
+        self.append(&header, data).await?;
+
+        Ok(())
     }
 
     /// Adds a file on the local filesystem to this archive.
@@ -186,10 +195,11 @@ impl<W: Write> Builder<W> {
     ///
     /// ar.append_path("foo/bar.txt").unwrap();
     /// ```
-    pub fn append_path<P: AsRef<Path>>(&mut self, path: P) -> io::Result<()> {
+    pub async fn append_path<P: AsRef<Path>>(&mut self, path: P) -> io::Result<()> {
         let mode = self.mode.clone();
         let follow = self.follow;
-        append_path_with_name(self.get_mut(), path.as_ref(), None, mode, follow)
+        append_path_with_name(self.get_mut(), path.as_ref(), None, mode, follow).await?;
+        Ok(())
     }
 
     /// Adds a file on the local filesystem to this archive under another name.
@@ -217,7 +227,7 @@ impl<W: Write> Builder<W> {
     /// // "bar/foo.txt".
     /// ar.append_path_with_name("foo/bar.txt", "bar/foo.txt").unwrap();
     /// ```
-    pub fn append_path_with_name<P: AsRef<Path>, N: AsRef<Path>>(
+    pub async fn append_path_with_name<P: AsRef<Path>, N: AsRef<Path>>(
         &mut self,
         path: P,
         name: N,
@@ -231,6 +241,8 @@ impl<W: Write> Builder<W> {
             mode,
             follow,
         )
+        .await?;
+        Ok(())
     }
 
     /// Adds a file to this archive with the given path as the name of the file
@@ -259,9 +271,14 @@ impl<W: Write> Builder<W> {
     /// let mut f = File::open("foo/bar/baz.txt").unwrap();
     /// ar.append_file("bar/baz.txt", &mut f).unwrap();
     /// ```
-    pub fn append_file<P: AsRef<Path>>(&mut self, path: P, file: &mut fs::File) -> io::Result<()> {
+    pub async fn append_file<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        file: &mut fs::File,
+    ) -> io::Result<()> {
         let mode = self.mode.clone();
-        append_file(self.get_mut(), path.as_ref(), file, mode)
+        append_file(self.get_mut(), path.as_ref(), file, mode).await?;
+        Ok(())
     }
 
     /// Adds a directory to this archive with the given path as the name of the
@@ -289,13 +306,14 @@ impl<W: Write> Builder<W> {
     /// // with a different name.
     /// ar.append_dir("bardir", ".").unwrap();
     /// ```
-    pub fn append_dir<P, Q>(&mut self, path: P, src_path: Q) -> io::Result<()>
+    pub async fn append_dir<P, Q>(&mut self, path: P, src_path: Q) -> io::Result<()>
     where
         P: AsRef<Path>,
         Q: AsRef<Path>,
     {
         let mode = self.mode.clone();
-        append_dir(self.get_mut(), path.as_ref(), src_path.as_ref(), mode)
+        append_dir(self.get_mut(), path.as_ref(), src_path.as_ref(), mode).await?;
+        Ok(())
     }
 
     /// Adds a directory and all of its contents (recursively) to this archive
@@ -320,7 +338,7 @@ impl<W: Write> Builder<W> {
     /// // with a different name.
     /// ar.append_dir_all("bardir", ".").unwrap();
     /// ```
-    pub fn append_dir_all<P, Q>(&mut self, path: P, src_path: Q) -> io::Result<()>
+    pub async fn append_dir_all<P, Q>(&mut self, path: P, src_path: Q) -> io::Result<()>
     where
         P: AsRef<Path>,
         Q: AsRef<Path>,
@@ -334,6 +352,8 @@ impl<W: Write> Builder<W> {
             mode,
             follow,
         )
+        .await?;
+        Ok(())
     }
 
     /// Finish writing this archive, emitting the termination sections.
@@ -343,45 +363,50 @@ impl<W: Write> Builder<W> {
     /// to be acquired.
     ///
     /// In most situations the `into_inner` method should be preferred.
-    pub fn finish(&mut self) -> io::Result<()> {
+    pub async fn finish(&mut self) -> io::Result<()> {
         if self.finished {
             return Ok(());
         }
         self.finished = true;
-        self.get_mut().write_all(&[0; 1024])
+        self.get_mut().write_all(&[0; 1024]).await?;
+        Ok(())
     }
 }
 
-fn append(mut dst: &mut dyn Write, header: &Header, mut data: &mut dyn Read) -> io::Result<()> {
-    dst.write_all(header.as_bytes())?;
-    let len = io::copy(&mut data, &mut dst)?;
+async fn append(
+    mut dst: &mut (dyn Write + Unpin),
+    header: &Header,
+    mut data: &mut (dyn Read + Unpin),
+) -> io::Result<()> {
+    dst.write_all(header.as_bytes()).await?;
+    let len = io::copy(&mut data, &mut dst).await?;
 
     // Pad with zeros if necessary.
     let buf = [0; 512];
     let remaining = 512 - (len % 512);
     if remaining < 512 {
-        dst.write_all(&buf[..remaining as usize])?;
+        dst.write_all(&buf[..remaining as usize]).await?;
     }
 
     Ok(())
 }
 
-fn append_path_with_name(
-    dst: &mut dyn Write,
+async fn append_path_with_name(
+    dst: &mut (dyn Write + Unpin),
     path: &Path,
     name: Option<&Path>,
     mode: HeaderMode,
     follow: bool,
 ) -> io::Result<()> {
     let stat = if follow {
-        fs::metadata(path).map_err(|err| {
+        fs::metadata(path).await.map_err(|err| {
             io::Error::new(
                 err.kind(),
                 format!("{} when getting metadata for {}", err, path.display()),
             )
         })?
     } else {
-        fs::symlink_metadata(path).map_err(|err| {
+        fs::symlink_metadata(path).await.map_err(|err| {
             io::Error::new(
                 err.kind(),
                 format!("{} when getting metadata for {}", err, path.display()),
@@ -390,11 +415,21 @@ fn append_path_with_name(
     };
     let ar_name = name.unwrap_or(path);
     if stat.is_file() {
-        append_fs(dst, ar_name, &stat, &mut fs::File::open(path)?, mode, None)
+        append_fs(
+            dst,
+            ar_name,
+            &stat,
+            &mut fs::File::open(path).await?,
+            mode,
+            None,
+        )
+        .await?;
+        Ok(())
     } else if stat.is_dir() {
-        append_fs(dst, ar_name, &stat, &mut io::empty(), mode, None)
+        append_fs(dst, ar_name, &stat, &mut io::empty(), mode, None).await?;
+        Ok(())
     } else if stat.file_type().is_symlink() {
-        let link_name = fs::read_link(path)?;
+        let link_name = fs::read_link(path).await?;
         append_fs(
             dst,
             ar_name,
@@ -403,29 +438,33 @@ fn append_path_with_name(
             mode,
             Some(&link_name),
         )
+        .await?;
+        Ok(())
     } else {
         Err(other(&format!("{} has unknown file type", path.display())))
     }
 }
 
-fn append_file(
-    dst: &mut dyn Write,
+async fn append_file(
+    dst: &mut (dyn Write + Unpin),
     path: &Path,
     file: &mut fs::File,
     mode: HeaderMode,
 ) -> io::Result<()> {
-    let stat = file.metadata()?;
-    append_fs(dst, path, &stat, file, mode, None)
+    let stat = file.metadata().await?;
+    append_fs(dst, path, &stat, file, mode, None).await?;
+    Ok(())
 }
 
-fn append_dir(
-    dst: &mut dyn Write,
+async fn append_dir(
+    dst: &mut (dyn Write + Unpin),
     path: &Path,
     src_path: &Path,
     mode: HeaderMode,
 ) -> io::Result<()> {
-    let stat = fs::metadata(src_path)?;
-    append_fs(dst, path, &stat, &mut io::empty(), mode, None)
+    let stat = fs::metadata(src_path).await?;
+    append_fs(dst, path, &stat, &mut io::empty(), mode, None).await?;
+    Ok(())
 }
 
 fn prepare_header(size: u64, entry_type: u8) -> Header {
@@ -443,7 +482,11 @@ fn prepare_header(size: u64, entry_type: u8) -> Header {
     header
 }
 
-fn prepare_header_path(dst: &mut dyn Write, header: &mut Header, path: &Path) -> io::Result<()> {
+async fn prepare_header_path(
+    dst: &mut (dyn Write + Unpin),
+    header: &mut Header,
+    path: &Path,
+) -> io::Result<()> {
     // Try to encode the path directly in the header, but if it ends up not
     // working (probably because it's too long) then try to use the GNU-specific
     // long name extension by emitting an entry which indicates that it's the
@@ -459,7 +502,7 @@ fn prepare_header_path(dst: &mut dyn Write, header: &mut Header, path: &Path) ->
         let header2 = prepare_header(data.len() as u64, b'L');
         // null-terminated string
         let mut data2 = data.chain(io::repeat(0).take(1));
-        append(dst, &header2, &mut data2)?;
+        append(dst, &header2, &mut data2).await?;
         // Truncate the path to store in the header we're about to emit to
         // ensure we've got something at least mentioned.
         let path = bytes2path(Cow::Borrowed(&data[..max]))?;
@@ -468,8 +511,8 @@ fn prepare_header_path(dst: &mut dyn Write, header: &mut Header, path: &Path) ->
     Ok(())
 }
 
-fn prepare_header_link(
-    dst: &mut dyn Write,
+async fn prepare_header_link(
+    dst: &mut (dyn Write + Unpin),
     header: &mut Header,
     link_name: &Path,
 ) -> io::Result<()> {
@@ -481,32 +524,34 @@ fn prepare_header_link(
         }
         let header2 = prepare_header(data.len() as u64, b'K');
         let mut data2 = data.chain(io::repeat(0).take(1));
-        append(dst, &header2, &mut data2)?;
+        append(dst, &header2, &mut data2).await?;
     }
     Ok(())
 }
 
-fn append_fs(
-    dst: &mut dyn Write,
+async fn append_fs(
+    dst: &mut (dyn Write + Unpin),
     path: &Path,
     meta: &fs::Metadata,
-    read: &mut dyn Read,
+    read: &mut (dyn Read + Unpin),
     mode: HeaderMode,
     link_name: Option<&Path>,
 ) -> io::Result<()> {
     let mut header = Header::new_gnu();
 
-    prepare_header_path(dst, &mut header, path)?;
+    prepare_header_path(dst, &mut header, path).await?;
     header.set_metadata_in_mode(meta, mode);
     if let Some(link_name) = link_name {
-        prepare_header_link(dst, &mut header, link_name)?;
+        prepare_header_link(dst, &mut header, link_name).await?;
     }
     header.set_cksum();
-    append(dst, &header, read)
+    append(dst, &header, read).await?;
+
+    Ok(())
 }
 
-fn append_dir_all(
-    dst: &mut dyn Write,
+async fn append_dir_all(
+    dst: &mut (dyn Write + Unpin),
     path: &Path,
     src_path: &Path,
     mode: HeaderMode,
@@ -516,28 +561,30 @@ fn append_dir_all(
     while let Some((src, is_dir, is_symlink)) = stack.pop() {
         let dest = path.join(src.strip_prefix(&src_path).unwrap());
         // In case of a symlink pointing to a directory, is_dir is false, but src.is_dir() will return true
-        if is_dir || (is_symlink && follow && src.is_dir()) {
-            for entry in fs::read_dir(&src)? {
+        if is_dir || (is_symlink && follow && src.is_dir().await) {
+            while let Some(entry) = fs::read_dir(&src).await?.next().await {
                 let entry = entry?;
-                let file_type = entry.file_type()?;
+                let file_type = entry.file_type().await?;
                 stack.push((entry.path(), file_type.is_dir(), file_type.is_symlink()));
             }
             if dest != Path::new("") {
-                append_dir(dst, &dest, &src, mode)?;
+                append_dir(dst, &dest, &src, mode).await?;
             }
         } else if !follow && is_symlink {
-            let stat = fs::symlink_metadata(&src)?;
-            let link_name = fs::read_link(&src)?;
-            append_fs(dst, &dest, &stat, &mut io::empty(), mode, Some(&link_name))?;
+            let stat = fs::symlink_metadata(&src).await?;
+            let link_name = fs::read_link(&src).await?;
+            append_fs(dst, &dest, &stat, &mut io::empty(), mode, Some(&link_name)).await?;
         } else {
-            append_file(dst, &dest, &mut fs::File::open(src)?, mode)?;
+            append_file(dst, &dest, &mut fs::File::open(src).await?, mode).await?;
         }
     }
     Ok(())
 }
 
-impl<W: Write> Drop for Builder<W> {
+impl<W: Write + Unpin> Drop for Builder<W> {
     fn drop(&mut self) {
-        let _ = self.finish();
+        async_std::task::block_on(async move {
+            let _ = self.finish().await;
+        });
     }
 }

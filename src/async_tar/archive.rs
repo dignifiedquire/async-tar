@@ -1,11 +1,11 @@
 use std::cell::{Cell, RefCell};
 use std::cmp;
 use std::marker;
-use std::path::Path;
 use std::pin::Pin;
 
 use async_std::io;
 use async_std::io::prelude::*;
+use async_std::path::Path;
 use async_std::prelude::*;
 use async_std::stream::Stream;
 use async_std::sync::Arc;
@@ -530,7 +530,8 @@ impl<R: Read + Unpin> Stream for EntriesFields<R> {
         loop {
             match self.state {
                 EntriesFieldsState::NotPolled => {
-                    self.state = EntriesFieldsState::Reading(Box::pin(self.next_entry()));
+                    unimplemented!()
+                    // self.state = EntriesFieldsState::Reading(Box::pin(self.next_entry()));
                 }
                 EntriesFieldsState::Reading(ref mut f) => match Pin::new(f).poll(cx) {
                     Poll::Pending => return Poll::Pending,
