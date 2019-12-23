@@ -31,7 +31,7 @@ pub struct ArchiveInner<R: ?Sized> {
     obj: RefCell<R>,
 }
 
-/// An iterator over the entries of an archive.
+/// A stream over the entries of an archive.
 pub struct Entries<'a, R: 'a + Read + Unpin> {
     fields: EntriesFields<'a>,
     _ignored: marker::PhantomData<&'a Archive<R>>,
@@ -40,8 +40,14 @@ pub struct Entries<'a, R: 'a + Read + Unpin> {
 struct EntriesFields<'a> {
     archive: &'a Archive<dyn Read + Unpin + 'a>,
     next: u64,
-    done: bool,
+    state: EntriesFieldsState<'a>,
     raw: bool,
+}
+
+enum EntriesFieldsState<'a> {
+    NotPolled,
+    Reading(Box<dyn Future<Output = io::Result<Option<Entry<'a, io::Empty>>>> + 'a> ),
+    Done
 }
 
 impl<R: Read + Unpin> Archive<R> {
@@ -64,11 +70,11 @@ impl<R: Read + Unpin> Archive<R> {
         self.inner.obj.into_inner()
     }
 
-    /// Construct an iterator over the entries in this archive.
+    /// Construct an stream over the entries in this archive.
     ///
     /// Note that care must be taken to consider each entry within an archive in
     /// sequence. If entries are processed out of sequence (from what the
-    /// iterator returns), then the contents read for each entry may be
+    /// stream returns), then the contents read for each entry may be
     /// corrupted.
     pub fn entries(&mut self) -> io::Result<Entries<R>> {
         let me: &mut Archive<dyn Read + Unpin> = self;
@@ -149,7 +155,7 @@ impl<'a> Archive<dyn Read + Unpin + 'a> {
         }
         Ok(EntriesFields {
             archive: self,
-            done: false,
+            state: EntriesFieldsState::NotPolled,
             next: 0,
             raw: false,
         })
@@ -179,7 +185,7 @@ impl<'a> Archive<dyn Read + Unpin + 'a> {
 }
 
 impl<'a, R: Read + Unpin> Entries<'a, R> {
-    /// Indicates whether this iterator will return raw entries or not.
+    /// Indicates whether this Stream will return raw entries or not.
     ///
     /// If the raw list of entries are returned, then no preprocessing happens
     /// on account of this library, for example taking into account GNU long name
@@ -194,18 +200,25 @@ impl<'a, R: Read + Unpin> Entries<'a, R> {
         }
     }
 }
-impl<'a, R: Read + Unpin> Iterator for Entries<'a, R> {
+impl<'a, R: Read + Unpin> Stream for Entries<'a, R> {
     type Item = io::Result<Entry<'a, R>>;
 
-    fn next(&mut self) -> Option<io::Result<Entry<'a, R>>> {
-        self.fields
-            .next()
-            .map(|result| result.map(|e| EntryFields::from(e).into_entry()))
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> std::task::Poll<Option<io::Result<Entry<'a, R>>>> {
+        let poll = self.fields.poll_next();
+        match poll {
+            Poll::Ready(Some(r)) => {
+                r.map(|e| EntryFields::from(e).into_entry())
+            }
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    
+        //.map(|result| result.map(|e| EntryFields::from(e).into_entry()))
     }
 }
 
 impl<'a> EntriesFields<'a> {
-    async fn next_entry_raw(&mut self) -> io::Result<Option<Entry<'a, io::Empty>>> {
+    async fn next_entry_raw(&'a mut self) -> io::Result<Option<Entry<'a, io::Empty>>> {
         let mut header = Header::new_old();
         let mut header_pos = self.next;
 
@@ -271,7 +284,7 @@ impl<'a> EntriesFields<'a> {
         Ok(Some(ret.into_entry()))
     }
 
-    async fn next_entry(&mut self) -> io::Result<Option<Entry<'a, io::Empty>>> {
+    async fn next_entry(&'a mut self) -> io::Result<Option<Entry<'a, io::Empty>>> {
         if self.raw {
             return self.next_entry_raw().await;
         }
@@ -445,18 +458,27 @@ impl<'a> Stream for EntriesFields<'a> {
     type Item = io::Result<Entry<'a, io::Empty>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<io::Result<Entry<'a, io::Empty>>>> {
-        if self.done {
-            Poll::Ready(None)
-        } else {
-            match self.next_entry() {
-                Ok(Some(e)) => Poll::Ready(Some(Ok(e))),
-                Ok(None) => {
-                    self.done = true;
-                    Poll::Ready(None)
-                }
-                Err(e) => {
-                    self.done = true;
-                    Poll::Ready(Some(Err(e)))
+        loop {
+            match self.state {
+                EntriesFieldsState::NotPolled => {
+                    self.state =
+                        EntriesFieldsState::Reading(Box::new(self.next_entry()));
+                },
+                EntriesFieldsState::Reading(f) => {
+                    match Pin::new_unchecked(f).as_mut().poll(cx) {
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(r) => {
+                            if r.is_err() {
+                                self.state = EntriesFieldsState::Done;
+                            } else {
+                                self.state = EntriesFieldsState::NotPolled;
+                            }
+                            return Poll::Ready(r.transpose());
+                        }
+                    }
+                },
+                EntriesFieldsState::Done => {
+                    return Poll::Ready(None);
                 }
             }
         }
