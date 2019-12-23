@@ -10,7 +10,7 @@ use async_std::prelude::*;
 use async_std::stream::Stream;
 use async_std::task::{Context, Poll};
 use pin_cell::PinCell;
-use pin_project::{pin_project, project};
+use pin_project::pin_project;
 
 use crate::async_tar::entry::{EntryFields, EntryIo};
 use crate::async_tar::error::TarError;
@@ -51,10 +51,11 @@ struct EntriesFields<'a> {
     raw: bool,
 }
 
-#[pin_project]
+type PinFutureObj<Output> = Pin<Box<dyn Future<Output = Output>>>;
+
 enum EntriesFieldsState<'a> {
     NotPolled,
-    Reading(Box<dyn Future<Output = io::Result<Option<Entry<'a, io::Empty>>>> + 'a + Unpin>),
+    Reading(PinFutureObj<io::Result<Option<Entry<'a, io::Empty>>>>),
     Done,
 }
 
@@ -200,7 +201,7 @@ impl<'a, R: Read + Unpin + 'a> Entries<'a, R> {
     /// If the raw list of entries are returned, then no preprocessing happens
     /// on account of this library, for example taking into account GNU long name
     /// or long link archive members. Raw iteration is disabled by default.
-    pub fn raw(self, raw: bool) -> Entries<'a, R> {
+    pub fn raw(self, raw: bool) -> Self {
         Entries {
             fields: EntriesFields {
                 raw: raw,
@@ -295,7 +296,7 @@ impl<'a> EntriesFields<'a> {
         Ok(Some(ret.into_entry()))
     }
 
-    async fn next_entry(&'a mut self) -> io::Result<Option<Entry<'a, io::Empty>>> {
+    async fn next_entry(&mut self) -> io::Result<Option<Entry<'a, io::Empty>>> {
         if self.raw {
             return self.next_entry_raw().await;
         }
@@ -470,28 +471,24 @@ impl<'a> EntriesFields<'a> {
 impl<'a> Stream for EntriesFields<'a> {
     type Item = io::Result<Entry<'a, io::Empty>>;
 
-    #[project]
     fn poll_next(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<io::Result<Entry<'a, io::Empty>>>> {
-        let this = self.project();
-
         loop {
-            #[project]
-            match Pin::new(&mut *this.state).project() {
+            match &mut self.state {
                 EntriesFieldsState::NotPolled => {
-                    // uff
-                    // self.state = EntriesFieldsState::Reading(Box::new(self.next_entry()));
+                    let fut = Box::pin(self.next_entry());
+                    // self.state = EntriesFieldsState::Reading(fut);
                 }
-                EntriesFieldsState::Reading(f) => match Pin::new(f).poll(cx) {
+                EntriesFieldsState::Reading(ref mut f) => match Pin::new(f).poll(cx) {
                     Poll::Pending => return Poll::Pending,
                     Poll::Ready(r) => {
                         if r.is_err() {
-                            *this.state = EntriesFieldsState::Done;
+                            self.state = EntriesFieldsState::Done;
                             return Poll::Ready(r.transpose());
                         } else {
-                            *this.state = EntriesFieldsState::NotPolled;
+                            self.state = EntriesFieldsState::NotPolled;
                             return Poll::Ready(r.transpose());
                         }
                     }
