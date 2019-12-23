@@ -1,3 +1,4 @@
+//! Async tar
 use async_std::io::{Error, ErrorKind};
 
 pub use crate::async_tar::archive::{Archive, Entries};

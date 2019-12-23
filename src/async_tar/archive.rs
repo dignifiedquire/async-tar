@@ -228,7 +228,7 @@ impl<'a, R: Read + Unpin> Stream for Entries<'a, R> {
 }
 
 impl<'a> EntriesFields<'a> {
-    async fn next_entry_raw(&'a mut self) -> io::Result<Option<Entry<'a, io::Empty>>> {
+    async fn next_entry_raw(&mut self) -> io::Result<Option<Entry<'a, io::Empty>>> {
         let mut header = Header::new_old();
         let mut header_pos = self.next;
 
@@ -302,11 +302,11 @@ impl<'a> EntriesFields<'a> {
         let mut gnu_longname = None;
         let mut gnu_longlink = None;
         let mut pax_extensions = None;
-        let mut processed: usize = 0;
+        let mut processed = 0;
+
         loop {
             processed += 1;
-            let next = self.next_entry_raw().await?;
-            let entry = match next {
+            let entry = match self.next_entry_raw().await? {
                 Some(entry) => entry,
                 None if processed > 1 => {
                     return Err(other(
@@ -360,6 +360,11 @@ impl<'a> EntriesFields<'a> {
             self.parse_sparse_header(&mut fields).await?;
             return Ok(Some(fields.into_entry()));
         }
+
+        Err(other(
+            "members found describing a future member \
+             but no future member found",
+        ))
     }
 
     async fn parse_sparse_header(&mut self, entry: &mut EntryFields<'a>) -> io::Result<()> {
@@ -480,9 +485,8 @@ impl<'a> Stream for EntriesFields<'a> {
             #[project]
             match Pin::new(&mut *this.state).project() {
                 EntriesFieldsState::NotPolled => {
-                    // uff, really tricky because of anon lifetime mixed with 'a
+                    // uff
                     // self.state = EntriesFieldsState::Reading(Box::new(self.next_entry()));
-                    unimplemented!()
                 }
                 EntriesFieldsState::Reading(f) => match Pin::new(f).poll(cx) {
                     Poll::Pending => return Poll::Pending,
