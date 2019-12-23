@@ -480,6 +480,7 @@ impl<'a> Stream for EntriesFields<'a> {
             #[project]
             match Pin::new(&mut *this.state).project() {
                 EntriesFieldsState::NotPolled => {
+                    // uff, really tricky because of anon lifetime mixed with 'a
                     // self.state = EntriesFieldsState::Reading(Box::new(self.next_entry()));
                     unimplemented!()
                 }

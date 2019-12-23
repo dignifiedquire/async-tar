@@ -9,6 +9,7 @@ use async_std::fs::OpenOptions;
 use async_std::io::prelude::*;
 use async_std::io::{self, Error, ErrorKind, SeekFrom};
 use async_std::task::{Context, Poll};
+use pin_project::{pin_project, project};
 
 use filetime::{self, FileTime};
 
@@ -24,13 +25,16 @@ use crate::async_tar::{Archive, Header, PaxExtensions};
 /// This structure is a window into a portion of a borrowed archive which can
 /// be inspected. It acts as a file handle by implementing the Reader trait. An
 /// entry cannot be rewritten once inserted into an archive.
+#[pin_project]
 pub struct Entry<'a, R: 'a + Read + Unpin> {
+    #[pin]
     fields: EntryFields<'a>,
     _ignored: marker::PhantomData<&'a Archive<R>>,
 }
 
 // private implementation detail of `Entry`, but concrete (no type parameters)
 // and also all-public to be constructed from other modules.
+#[pin_project]
 pub struct EntryFields<'a> {
     pub long_pathname: Option<Vec<u8>>,
     pub long_linkname: Option<Vec<u8>>,
@@ -39,15 +43,17 @@ pub struct EntryFields<'a> {
     pub size: u64,
     pub header_pos: u64,
     pub file_pos: u64,
+    #[pin]
     pub data: Vec<EntryIo<'a>>,
     pub unpack_xattrs: bool,
     pub preserve_permissions: bool,
     pub preserve_mtime: bool,
 }
 
+#[pin_project]
 pub enum EntryIo<'a> {
-    Pad(io::Take<io::Repeat>),
-    Data(io::Take<&'a ArchiveInner<dyn Read + Unpin + 'a>>),
+    Pad(#[pin] io::Take<io::Repeat>),
+    Data(#[pin] io::Take<&'a ArchiveInner<dyn Read + Unpin + 'a>>),
 }
 
 /// When unpacking items the unpacked thing is returned to allow custom
@@ -260,8 +266,8 @@ impl<'a, R: Read + Unpin> Read for Entry<'a, R> {
         cx: &mut Context<'_>,
         into: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        // Pin::new(&mut &*self).poll_read(cx, into)
-        unimplemented!()
+        let mut this = self.project();
+        Pin::new(&mut *this.fields).poll_read(cx, into)
     }
 }
 
@@ -783,29 +789,35 @@ impl<'a> Read for EntryFields<'a> {
         cx: &mut Context<'_>,
         into: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        unimplemented!()
-        // loop {
-        //     match self.data.get_mut(0).map(|io| io.read(into)) {
-        //         Some(Ok(0)) => {
-        //             self.data.remove(0);
-        //         }
-        //         Some(r) => return r,
-        //         None => return Ok(0),
-        //     }
-        // }
+        let this = self.project();
+        loop {
+            if let Some(io) = this.data.get_mut().get_mut(0) {
+                match async_std::task::ready!(Pin::new(io).poll_read(cx, into)) {
+                    Ok(0) => {
+                        // ufff
+                        // this.data.remove(0);
+                        unimplemented!()
+                    }
+                    val => return Poll::Ready(val),
+                }
+            } else {
+                return Poll::Ready(Ok(0));
+            }
+        }
     }
 }
 
 impl<'a> Read for EntryIo<'a> {
+    #[project]
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         into: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        unimplemented!()
-        // match *self {
-        //     EntryIo::Pad(ref mut io) => io.read(into),
-        //     EntryIo::Data(ref mut io) => io.read(into),
-        // }
+        #[project]
+        match self.project() {
+            EntryIo::Pad(io) => io.poll_read(cx, into),
+            EntryIo::Data(io) => io.poll_read(cx, into),
+        }
     }
 }
