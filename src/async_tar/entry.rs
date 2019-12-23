@@ -47,7 +47,7 @@ pub struct EntryFields<'a> {
 
 pub enum EntryIo<'a> {
     Pad(io::Take<io::Repeat>),
-    Data(io::Take<&'a ArchiveInner<dyn Read + 'a>>),
+    Data(io::Take<&'a ArchiveInner<dyn Read + Unpin + 'a>>),
 }
 
 /// When unpacking items the unpacked thing is returned to allow custom
