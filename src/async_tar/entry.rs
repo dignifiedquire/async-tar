@@ -13,7 +13,6 @@ use pin_project::{pin_project, project};
 
 use filetime::{self, FileTime};
 
-use crate::async_tar::archive::ArchiveInner;
 use crate::async_tar::error::TarError;
 use crate::async_tar::header::bytes2path;
 use crate::async_tar::other;
@@ -26,16 +25,16 @@ use crate::async_tar::{Archive, Header, PaxExtensions};
 /// be inspected. It acts as a file handle by implementing the Reader trait. An
 /// entry cannot be rewritten once inserted into an archive.
 #[pin_project]
-pub struct Entry<'a, R: 'a + Read + Unpin> {
+pub struct Entry<R: Read + Unpin> {
     #[pin]
-    fields: EntryFields<'a>,
-    _ignored: marker::PhantomData<&'a Archive<R>>,
+    fields: EntryFields<R>,
+    _ignored: marker::PhantomData<Archive<R>>,
 }
 
 // private implementation detail of `Entry`, but concrete (no type parameters)
 // and also all-public to be constructed from other modules.
 #[pin_project]
-pub struct EntryFields<'a> {
+pub struct EntryFields<R: Read + Unpin> {
     pub long_pathname: Option<Vec<u8>>,
     pub long_linkname: Option<Vec<u8>>,
     pub pax_extensions: Option<Vec<u8>>,
@@ -44,18 +43,18 @@ pub struct EntryFields<'a> {
     pub header_pos: u64,
     pub file_pos: u64,
     #[pin]
-    pub data: Vec<EntryIo<'a>>,
+    pub data: Vec<EntryIo<R>>,
     pub unpack_xattrs: bool,
     pub preserve_permissions: bool,
     pub preserve_mtime: bool,
     #[pin]
-    pub(crate) read_state: Option<EntryIo<'a>>,
+    pub(crate) read_state: Option<EntryIo<R>>,
 }
 
 #[pin_project]
-pub enum EntryIo<'a> {
+pub enum EntryIo<R: Read + Unpin> {
     Pad(#[pin] io::Take<io::Repeat>),
-    Data(#[pin] io::Take<&'a ArchiveInner<dyn Read + Unpin + 'a>>),
+    Data(#[pin] io::Take<R>),
 }
 
 /// When unpacking items the unpacked thing is returned to allow custom
@@ -70,7 +69,7 @@ pub enum Unpacked {
     __Nonexhaustive,
 }
 
-impl<'a, R: Read + Unpin> Entry<'a, R> {
+impl<R: Read + Unpin> Entry<R> {
     /// Returns the path name for this entry.
     ///
     /// This method may fail if the pathname is not valid Unicode and this is
@@ -262,7 +261,7 @@ impl<'a, R: Read + Unpin> Entry<'a, R> {
     }
 }
 
-impl<'a, R: Read + Unpin> Read for Entry<'a, R> {
+impl<R: Read + Unpin> Read for Entry<R> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -273,12 +272,12 @@ impl<'a, R: Read + Unpin> Read for Entry<'a, R> {
     }
 }
 
-impl<'a> EntryFields<'a> {
-    pub fn from<R: Read + Unpin>(entry: Entry<R>) -> EntryFields {
+impl<R: Read + Unpin> EntryFields<R> {
+    pub fn from(entry: Entry<R>) -> Self {
         entry.fields
     }
 
-    pub fn into_entry<R: Read + Unpin>(self) -> Entry<'a, R> {
+    pub fn into_entry(self) -> Entry<R> {
         Entry {
             fields: self,
             _ignored: marker::PhantomData,
@@ -704,7 +703,10 @@ impl<'a> EntryFields<'a> {
         }
 
         #[cfg(all(unix, feature = "xattr"))]
-        async fn set_xattrs(me: &mut EntryFields<'_>, dst: &Path) -> io::Result<()> {
+        async fn set_xattrs<R: Read + Unpin>(
+            me: &mut EntryFields<R>,
+            dst: &Path,
+        ) -> io::Result<()> {
             use std::ffi::OsStr;
             use std::os::unix::prelude::*;
 
@@ -785,7 +787,7 @@ impl<'a> EntryFields<'a> {
     }
 }
 
-impl<'a> Read for EntryFields<'a> {
+impl<R: Read + Unpin> Read for EntryFields<R> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -824,7 +826,7 @@ impl<'a> Read for EntryFields<'a> {
     }
 }
 
-impl<'a> Read for EntryIo<'a> {
+impl<R: Read + Unpin> Read for EntryIo<R> {
     #[project]
     fn poll_read(
         self: Pin<&mut Self>,

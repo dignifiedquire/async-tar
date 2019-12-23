@@ -8,6 +8,7 @@ use async_std::io;
 use async_std::io::prelude::*;
 use async_std::prelude::*;
 use async_std::stream::Stream;
+use async_std::sync::Arc;
 use async_std::task::{Context, Poll};
 use pin_cell::PinCell;
 use pin_project::pin_project;
@@ -20,12 +21,20 @@ use crate::async_tar::{Entry, GnuExtSparseHeader, GnuSparseHeader, Header};
 /// A top-level representation of an archive file.
 ///
 /// This archive can have an entry added to it and it can be iterated over.
-pub struct Archive<R: ?Sized + Read + Unpin> {
-    inner: ArchiveInner<R>,
+pub struct Archive<R: Read + Unpin> {
+    inner: Arc<ArchiveInner<R>>,
+}
+
+impl<R: Read + Unpin> Clone for Archive<R> {
+    fn clone(&self) -> Self {
+        Archive {
+            inner: self.inner.clone(),
+        }
+    }
 }
 
 #[pin_project]
-pub struct ArchiveInner<R: ?Sized> {
+pub struct ArchiveInner<R> {
     pos: Cell<u64>,
     unpack_xattrs: bool,
     preserve_permissions: bool,
@@ -35,27 +44,111 @@ pub struct ArchiveInner<R: ?Sized> {
     obj: PinCell<R>,
 }
 
+/// Configure the archive.
+pub struct ArchiveBuilder<R: Read + Unpin> {
+    obj: PinCell<R>,
+    unpack_xattrs: bool,
+    preserve_permissions: bool,
+    preserve_mtime: bool,
+    ignore_zeros: bool,
+}
+
+impl<R: Read + Unpin> ArchiveBuilder<R> {
+    /// Create a new builder.
+    pub fn new(obj: R) -> Self {
+        ArchiveBuilder {
+            unpack_xattrs: false,
+            preserve_permissions: false,
+            preserve_mtime: true,
+            ignore_zeros: false,
+            obj: PinCell::new(obj),
+        }
+    }
+
+    /// Indicate whether extended file attributes (xattrs on Unix) are preserved
+    /// when unpacking this archive.
+    ///
+    /// This flag is disabled by default and is currently only implemented on
+    /// Unix using xattr support. This may eventually be implemented for
+    /// Windows, however, if other archive implementations are found which do
+    /// this as well.
+    pub fn set_unpack_xattrs(mut self, unpack_xattrs: bool) -> Self {
+        self.unpack_xattrs = unpack_xattrs;
+        self
+    }
+
+    /// Indicate whether extended permissions (like suid on Unix) are preserved
+    /// when unpacking this entry.
+    ///
+    /// This flag is disabled by default and is currently only implemented on
+    /// Unix.
+    pub fn set_preserve_permissions(mut self, preserve: bool) -> Self {
+        self.preserve_permissions = preserve;
+        self
+    }
+
+    /// Indicate whether access time information is preserved when unpacking
+    /// this entry.
+    ///
+    /// This flag is enabled by default.
+    pub fn set_preserve_mtime(mut self, preserve: bool) -> Self {
+        self.preserve_mtime = preserve;
+        self
+    }
+
+    /// Ignore zeroed headers, which would otherwise indicate to the archive that it has no more
+    /// entries.
+    ///
+    /// This can be used in case multiple tar archives have been concatenated together.
+    pub fn set_ignore_zeros(mut self, ignore_zeros: bool) -> Self {
+        self.ignore_zeros = ignore_zeros;
+        self
+    }
+
+    /// Construct the archive, ready to accept inputs.
+    pub fn build(self) -> Archive<R> {
+        let Self {
+            unpack_xattrs,
+            preserve_permissions,
+            preserve_mtime,
+            ignore_zeros,
+            obj,
+        } = self;
+
+        Archive {
+            inner: Arc::new(ArchiveInner {
+                unpack_xattrs,
+                preserve_permissions,
+                preserve_mtime,
+                ignore_zeros,
+                obj,
+                pos: Cell::new(0),
+            }),
+        }
+    }
+}
+
 /// A stream over the entries of an archive.
 #[pin_project]
-pub struct Entries<'a, R: 'a + Read + Unpin> {
+pub struct Entries<R: Read + Unpin> {
     #[pin]
-    fields: EntriesFields<'a>,
-    _ignored: marker::PhantomData<&'a Archive<R>>,
+    fields: EntriesFields<R>,
+    _ignored: marker::PhantomData<Archive<R>>,
 }
 
 #[pin_project]
-struct EntriesFields<'a> {
-    archive: &'a Archive<dyn Read + Unpin + 'a>,
+struct EntriesFields<R: Read + Unpin> {
+    archive: Archive<R>,
     next: u64,
-    state: EntriesFieldsState<'a>,
+    state: EntriesFieldsState<R>,
     raw: bool,
 }
 
-type PinFutureObj<Output> = Pin<Box<dyn Future<Output = Output>>>;
+type PinFutureObj<Output> = Pin<Box<dyn Future<Output = Output> + 'static>>;
 
-enum EntriesFieldsState<'a> {
+enum EntriesFieldsState<R: Read + Unpin> {
     NotPolled,
-    Reading(PinFutureObj<io::Result<Option<Entry<'a, io::Empty>>>>),
+    Reading(PinFutureObj<io::Result<Option<Entry<Archive<R>>>>>),
     Done,
 }
 
@@ -63,21 +156,28 @@ impl<R: Read + Unpin> Archive<R> {
     /// Create a new archive with the underlying object as the reader.
     pub fn new(obj: R) -> Archive<R> {
         Archive {
-            inner: ArchiveInner {
+            inner: Arc::new(ArchiveInner {
                 unpack_xattrs: false,
                 preserve_permissions: false,
                 preserve_mtime: true,
                 ignore_zeros: false,
                 obj: PinCell::new(obj),
                 pos: Cell::new(0),
-            },
+            }),
         }
     }
 
     /// Unwrap this archive, returning the underlying object.
-    pub fn into_inner(self) -> R {
-        let c: RefCell<R> = self.inner.obj.into();
-        c.into_inner()
+    pub fn into_inner(self) -> Result<R, Self> {
+        let Self { inner } = self;
+
+        match Arc::try_unwrap(inner) {
+            Ok(inner) => {
+                let c: RefCell<R> = inner.obj.into();
+                Ok(c.into_inner())
+            }
+            Err(inner) => Err(Self { inner }),
+        }
     }
 
     /// Construct an stream over the entries in this archive.
@@ -87,9 +187,20 @@ impl<R: Read + Unpin> Archive<R> {
     /// stream returns), then the contents read for each entry may be
     /// corrupted.
     pub fn entries(&mut self) -> io::Result<Entries<R>> {
-        let me: &mut Archive<dyn Read + Unpin> = self;
-        me._entries().map(|fields| Entries {
-            fields: fields,
+        if self.inner.pos.get() != 0 {
+            return Err(other(
+                "cannot call entries unless archive is at \
+                 position 0",
+            ));
+        }
+
+        Ok(Entries {
+            fields: EntriesFields {
+                archive: self.clone(),
+                state: EntriesFieldsState::NotPolled,
+                next: 0,
+                raw: false,
+            },
             _ignored: marker::PhantomData,
         })
     }
@@ -114,78 +225,20 @@ impl<R: Read + Unpin> Archive<R> {
     /// ar.unpack("foo").await.unwrap();
     /// ```
     pub async fn unpack<P: AsRef<Path>>(&mut self, dst: P) -> io::Result<()> {
-        let me: &mut Archive<dyn Read + Unpin> = self;
-        me._unpack(dst.as_ref()).await
-    }
-
-    /// Indicate whether extended file attributes (xattrs on Unix) are preserved
-    /// when unpacking this archive.
-    ///
-    /// This flag is disabled by default and is currently only implemented on
-    /// Unix using xattr support. This may eventually be implemented for
-    /// Windows, however, if other archive implementations are found which do
-    /// this as well.
-    pub fn set_unpack_xattrs(&mut self, unpack_xattrs: bool) {
-        self.inner.unpack_xattrs = unpack_xattrs;
-    }
-
-    /// Indicate whether extended permissions (like suid on Unix) are preserved
-    /// when unpacking this entry.
-    ///
-    /// This flag is disabled by default and is currently only implemented on
-    /// Unix.
-    pub fn set_preserve_permissions(&mut self, preserve: bool) {
-        self.inner.preserve_permissions = preserve;
-    }
-
-    /// Indicate whether access time information is preserved when unpacking
-    /// this entry.
-    ///
-    /// This flag is enabled by default.
-    pub fn set_preserve_mtime(&mut self, preserve: bool) {
-        self.inner.preserve_mtime = preserve;
-    }
-
-    /// Ignore zeroed headers, which would otherwise indicate to the archive that it has no more
-    /// entries.
-    ///
-    /// This can be used in case multiple tar archives have been concatenated together.
-    pub fn set_ignore_zeros(&mut self, ignore_zeros: bool) {
-        self.inner.ignore_zeros = ignore_zeros;
-    }
-}
-
-impl<'a> Archive<dyn Read + Unpin + 'a> {
-    fn _entries(&mut self) -> io::Result<EntriesFields> {
-        if self.inner.pos.get() != 0 {
-            return Err(other(
-                "cannot call entries unless archive is at \
-                 position 0",
-            ));
-        }
-        Ok(EntriesFields {
-            archive: self,
-            state: EntriesFieldsState::NotPolled,
-            next: 0,
-            raw: false,
-        })
-    }
-
-    async fn _unpack(&mut self, dst: &Path) -> io::Result<()> {
-        let mut entries = self._entries()?;
+        let mut entries = self.entries()?;
         let mut pinned = Pin::new(&mut entries);
         while let Some(entry) = pinned.next().await {
             let mut file = entry.map_err(|e| TarError::new("failed to iterate over archive", e))?;
-            file.unpack_in(dst).await?;
+            file.unpack_in(dst.as_ref()).await?;
         }
         Ok(())
     }
 
-    async fn skip(&self, mut amt: u64) -> io::Result<()> {
+    async fn skip(&mut self, mut amt: u64) -> io::Result<()> {
         let mut buf = [0u8; 4096 * 8];
         while amt > 0 {
             let n = cmp::min(amt, buf.len() as u64);
-            let n = (&self.inner).read(&mut buf[..n as usize]).await?;
+            let n = self.read(&mut buf[..n as usize]).await?;
             if n == 0 {
                 return Err(other("unexpected EOF during skip"));
             }
@@ -195,7 +248,7 @@ impl<'a> Archive<dyn Read + Unpin + 'a> {
     }
 }
 
-impl<'a, R: Read + Unpin + 'a> Entries<'a, R> {
+impl<R: Read + Unpin> Entries<R> {
     /// Indicates whether this Stream will return raw entries or not.
     ///
     /// If the raw list of entries are returned, then no preprocessing happens
@@ -211,13 +264,13 @@ impl<'a, R: Read + Unpin + 'a> Entries<'a, R> {
         }
     }
 }
-impl<'a, R: Read + Unpin> Stream for Entries<'a, R> {
-    type Item = io::Result<Entry<'a, R>>;
+impl<R: Read + Unpin> Stream for Entries<R> {
+    type Item = io::Result<Entry<Archive<R>>>;
 
     fn poll_next(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> std::task::Poll<Option<io::Result<Entry<'a, R>>>> {
+    ) -> std::task::Poll<Option<Self::Item>> {
         let mut this = self.project();
         let fields = Pin::new(&mut this.fields);
         let poll = async_std::task::ready!(fields.poll_next(cx));
@@ -228,8 +281,8 @@ impl<'a, R: Read + Unpin> Stream for Entries<'a, R> {
     }
 }
 
-impl<'a> EntriesFields<'a> {
-    async fn next_entry_raw(&mut self) -> io::Result<Option<Entry<'a, io::Empty>>> {
+impl<R: Read + Unpin> EntriesFields<R> {
+    async fn next_entry_raw(&mut self) -> io::Result<Option<Entry<Archive<R>>>> {
         let mut header = Header::new_old();
         let mut header_pos = self.next;
 
@@ -239,7 +292,7 @@ impl<'a> EntriesFields<'a> {
             self.archive.skip(delta).await?;
 
             // EOF is an indicator that we are at the end of the archive.
-            if !try_read_all(&mut &self.archive.inner, header.as_mut_bytes()).await? {
+            if !try_read_all(&mut self.archive, header.as_mut_bytes()).await? {
                 return Ok(None);
             }
 
@@ -273,11 +326,13 @@ impl<'a> EntriesFields<'a> {
         let file_pos = self.next;
         let size = header.entry_size()?;
 
+        let data = EntryIo::Data(self.archive.clone().take(size));
+
         let ret = EntryFields {
             size: size,
             header_pos: header_pos,
             file_pos: file_pos,
-            data: vec![EntryIo::Data((&self.archive.inner).take(size))],
+            data: vec![data],
             header: header,
             long_pathname: None,
             long_linkname: None,
@@ -296,7 +351,7 @@ impl<'a> EntriesFields<'a> {
         Ok(Some(ret.into_entry()))
     }
 
-    async fn next_entry(&mut self) -> io::Result<Option<Entry<'a, io::Empty>>> {
+    async fn next_entry(&mut self) -> io::Result<Option<Entry<Archive<R>>>> {
         if self.raw {
             return self.next_entry_raw().await;
         }
@@ -364,7 +419,7 @@ impl<'a> EntriesFields<'a> {
         }
     }
 
-    async fn parse_sparse_header(&mut self, entry: &mut EntryFields<'a>) -> io::Result<()> {
+    async fn parse_sparse_header(&mut self, entry: &mut EntryFields<Archive<R>>) -> io::Result<()> {
         if !entry.header.entry_type().is_gnu_sparse() {
             return Ok(());
         }
@@ -398,7 +453,7 @@ impl<'a> EntriesFields<'a> {
         let mut remaining = entry.size;
         {
             let data = &mut entry.data;
-            let reader = &self.archive.inner;
+            let reader = self.archive.clone();
             let size = entry.size;
             let mut add_block = |block: &GnuSparseHeader| -> io::Result<_> {
                 if block.is_empty() {
@@ -430,7 +485,7 @@ impl<'a> EntriesFields<'a> {
                          listed",
                     )
                 })?;
-                data.push(EntryIo::Data(reader.take(len)));
+                data.push(EntryIo::Data(reader.clone().take(len)));
                 Ok(())
             };
             for block in gnu.sparse.iter() {
@@ -440,7 +495,7 @@ impl<'a> EntriesFields<'a> {
                 let mut ext = GnuExtSparseHeader::new();
                 ext.isextended[0] = 1;
                 while ext.is_extended() {
-                    if !try_read_all(&mut &self.archive.inner, ext.as_mut_bytes()).await? {
+                    if !try_read_all(&mut self.archive, ext.as_mut_bytes()).await? {
                         return Err(other("failed to read extension"));
                     }
 
@@ -468,18 +523,19 @@ impl<'a> EntriesFields<'a> {
     }
 }
 
-impl<'a> Stream for EntriesFields<'a> {
-    type Item = io::Result<Entry<'a, io::Empty>>;
+impl<R: Read + Unpin> Stream for EntriesFields<R> {
+    type Item = io::Result<Entry<Archive<R>>>;
 
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<io::Result<Entry<'a, io::Empty>>>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let s = &mut self.state;
         loop {
-            match &mut self.state {
+            match s {
                 EntriesFieldsState::NotPolled => {
-                    let fut = Box::pin(self.next_entry());
-                    // self.state = EntriesFieldsState::Reading(fut);
+                    let state =
+                        EntriesFieldsState::Reading(Box::pin(
+                            async move { self.next_entry().await },
+                        ));
+                    self.state = state;
                 }
                 EntriesFieldsState::Reading(ref mut f) => match Pin::new(f).poll(cx) {
                     Poll::Pending => return Poll::Pending,
@@ -501,19 +557,18 @@ impl<'a> Stream for EntriesFields<'a> {
     }
 }
 
-impl<'a, R: ?Sized + Read + Unpin> Read for &'a ArchiveInner<R> {
+impl<R: Read + Unpin> Read for Archive<R> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         into: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        let this = Pin::new(&**self).project_ref();
-        let mut r = this.obj.as_ref().borrow_mut();
+        let mut r = Pin::new(&Pin::new(&mut &*self.inner).obj).borrow_mut();
 
         let res = async_std::task::ready!(pin_cell::PinMut::as_mut(&mut r).poll_read(cx, into));
         match res {
             Ok(i) => {
-                self.pos.set(self.pos.get() + i as u64);
+                self.inner.pos.set(self.inner.pos.get() + i as u64);
                 Poll::Ready(Ok(i))
             }
             Err(err) => Poll::Ready(Err(err)),
@@ -525,7 +580,7 @@ impl<'a, R: ?Sized + Read + Unpin> Read for &'a ArchiveInner<R> {
 ///
 /// If the reader reaches its end before filling the buffer at all, returns `false`.
 /// Otherwise returns `true`.
-async fn try_read_all<R: Read + Unpin>(r: &mut R, buf: &mut [u8]) -> io::Result<bool> {
+async fn try_read_all<R: Read + Unpin>(mut r: R, buf: &mut [u8]) -> io::Result<bool> {
     let mut read = 0;
     while read < buf.len() {
         match r.read(&mut buf[read..]).await? {
