@@ -470,13 +470,14 @@ impl<'a> Stream for EntriesFields<'a> {
 
     #[project]
     fn poll_next(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<io::Result<Entry<'a, io::Empty>>>> {
         let this = self.project();
+
         loop {
             #[project]
-            match Pin::new(this.state).project() {
+            match Pin::new(&mut *this.state).project() {
                 EntriesFieldsState::NotPolled => {
                     // self.state = EntriesFieldsState::Reading(Box::new(self.next_entry()));
                     unimplemented!()
@@ -485,11 +486,12 @@ impl<'a> Stream for EntriesFields<'a> {
                     Poll::Pending => return Poll::Pending,
                     Poll::Ready(r) => {
                         if r.is_err() {
-                            self.state = EntriesFieldsState::Done;
+                            *this.state = EntriesFieldsState::Done;
+                            return Poll::Ready(r.transpose());
                         } else {
-                            self.state = EntriesFieldsState::NotPolled;
+                            *this.state = EntriesFieldsState::NotPolled;
+                            return Poll::Ready(r.transpose());
                         }
-                        return Poll::Ready(r.transpose());
                     }
                 },
                 EntriesFieldsState::Done => {
