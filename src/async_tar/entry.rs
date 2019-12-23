@@ -258,7 +258,7 @@ impl<'a, R: Read + Unpin> Read for Entry<'a, R> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        into: &mut [u8]
+        into: &mut [u8],
     ) -> Poll<io::Result<usize>> {
         // Pin::new(&mut &*self).poll_read(cx, into)
         unimplemented!()
@@ -409,7 +409,8 @@ impl<'a> EntryFields<'a> {
 
         let canon_target = self.validate_inside_dst(&dst, parent)?;
 
-        self.unpack(Some(&canon_target), &file_dst).await
+        self.unpack(Some(&canon_target), &file_dst)
+            .await
             .map_err(|e| TarError::new(&format!("failed to unpack `{}`", file_dst.display()), e))?;
 
         Ok(true)
@@ -555,7 +556,11 @@ impl<'a> EntryFields<'a> {
         // Ensure we write a new file rather than overwriting in-place which
         // is attackable; if an existing file is found unlink it.
         async fn open(dst: &Path) -> io::Result<fs::File> {
-            OpenOptions::new().write(true).create_new(true).open(dst).await
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(dst)
+                .await
         };
         let mut f = async {
             let mut f = match open(dst).await {
@@ -589,18 +594,19 @@ impl<'a> EntryFields<'a> {
                 }
             }
             Ok::<fs::File, io::Error>(f)
-        }.await
-        .map_err(|e| {
-            let header = self.header.path_bytes();
-            TarError::new(
-                &format!(
-                    "failed to unpack `{}` into `{}`",
-                    String::from_utf8_lossy(&header),
-                    dst.display()
-                ),
-                e,
-            )
-        })?;
+        }
+            .await
+            .map_err(|e| {
+                let header = self.header.path_bytes();
+                TarError::new(
+                    &format!(
+                        "failed to unpack `{}` into `{}`",
+                        String::from_utf8_lossy(&header),
+                        dst.display()
+                    ),
+                    e,
+                )
+            })?;
 
         if self.preserve_mtime {
             if let Ok(mtime) = self.header.mtime() {
@@ -772,7 +778,11 @@ impl<'a> EntryFields<'a> {
 }
 
 impl<'a> Read for EntryFields<'a> {
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, into: &mut [u8]) -> Poll<io::Result<usize>> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        into: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
         unimplemented!()
         // loop {
         //     match self.data.get_mut(0).map(|io| io.read(into)) {
@@ -787,7 +797,11 @@ impl<'a> Read for EntryFields<'a> {
 }
 
 impl<'a> Read for EntryIo<'a> {
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, into: &mut [u8]) -> Poll<io::Result<usize>> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        into: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
         unimplemented!()
         // match *self {
         //     EntryIo::Pad(ref mut io) => io.read(into),

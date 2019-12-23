@@ -9,6 +9,8 @@ use async_std::io::prelude::*;
 use async_std::prelude::*;
 use async_std::stream::Stream;
 use async_std::task::{Context, Poll};
+use pin_cell::PinCell;
+use pin_project::{pin_project, project};
 
 use crate::async_tar::entry::{EntryFields, EntryIo};
 use crate::async_tar::error::TarError;
@@ -22,21 +24,26 @@ pub struct Archive<R: ?Sized + Read + Unpin> {
     inner: ArchiveInner<R>,
 }
 
+#[pin_project]
 pub struct ArchiveInner<R: ?Sized> {
     pos: Cell<u64>,
     unpack_xattrs: bool,
     preserve_permissions: bool,
     preserve_mtime: bool,
     ignore_zeros: bool,
-    obj: RefCell<R>,
+    #[pin]
+    obj: PinCell<R>,
 }
 
 /// A stream over the entries of an archive.
+#[pin_project]
 pub struct Entries<'a, R: 'a + Read + Unpin> {
+    #[pin]
     fields: EntriesFields<'a>,
     _ignored: marker::PhantomData<&'a Archive<R>>,
 }
 
+#[pin_project]
 struct EntriesFields<'a> {
     archive: &'a Archive<dyn Read + Unpin + 'a>,
     next: u64,
@@ -44,10 +51,11 @@ struct EntriesFields<'a> {
     raw: bool,
 }
 
+#[pin_project]
 enum EntriesFieldsState<'a> {
     NotPolled,
-    Reading(Box<dyn Future<Output = io::Result<Option<Entry<'a, io::Empty>>>> + 'a> ),
-    Done
+    Reading(Box<dyn Future<Output = io::Result<Option<Entry<'a, io::Empty>>>> + 'a + Unpin>),
+    Done,
 }
 
 impl<R: Read + Unpin> Archive<R> {
@@ -59,7 +67,7 @@ impl<R: Read + Unpin> Archive<R> {
                 preserve_permissions: false,
                 preserve_mtime: true,
                 ignore_zeros: false,
-                obj: RefCell::new(obj),
+                obj: PinCell::new(obj),
                 pos: Cell::new(0),
             },
         }
@@ -67,7 +75,8 @@ impl<R: Read + Unpin> Archive<R> {
 
     /// Unwrap this archive, returning the underlying object.
     pub fn into_inner(self) -> R {
-        self.inner.obj.into_inner()
+        let c: RefCell<R> = self.inner.obj.into();
+        c.into_inner()
     }
 
     /// Construct an stream over the entries in this archive.
@@ -162,8 +171,9 @@ impl<'a> Archive<dyn Read + Unpin + 'a> {
     }
 
     async fn _unpack(&mut self, dst: &Path) -> io::Result<()> {
-        let entries = self._entries()?;
-        while let Some(entry) = entries.next().await {
+        let mut entries = self._entries()?;
+        let mut pinned = Pin::new(&mut entries);
+        while let Some(entry) = pinned.next().await {
             let mut file = entry.map_err(|e| TarError::new("failed to iterate over archive", e))?;
             file.unpack_in(dst).await?;
         }
@@ -184,7 +194,7 @@ impl<'a> Archive<dyn Read + Unpin + 'a> {
     }
 }
 
-impl<'a, R: Read + Unpin> Entries<'a, R> {
+impl<'a, R: Read + Unpin + 'a> Entries<'a, R> {
     /// Indicates whether this Stream will return raw entries or not.
     ///
     /// If the raw list of entries are returned, then no preprocessing happens
@@ -203,17 +213,17 @@ impl<'a, R: Read + Unpin> Entries<'a, R> {
 impl<'a, R: Read + Unpin> Stream for Entries<'a, R> {
     type Item = io::Result<Entry<'a, R>>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> std::task::Poll<Option<io::Result<Entry<'a, R>>>> {
-        let poll = self.fields.poll_next();
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> std::task::Poll<Option<io::Result<Entry<'a, R>>>> {
+        let mut this = self.project();
+        let fields = Pin::new(&mut this.fields);
+        let poll = async_std::task::ready!(fields.poll_next(cx));
         match poll {
-            Poll::Ready(Some(r)) => {
-                r.map(|e| EntryFields::from(e).into_entry())
-            }
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+            Some(r) => Poll::Ready(Some(r.map(|e| EntryFields::from(e).into_entry()))),
+            None => Poll::Ready(None),
         }
-    
-        //.map(|result| result.map(|e| EntryFields::from(e).into_entry()))
     }
 }
 
@@ -295,7 +305,8 @@ impl<'a> EntriesFields<'a> {
         let mut processed: usize = 0;
         loop {
             processed += 1;
-            let entry = match self.next_entry_raw().await? {
+            let next = self.next_entry_raw().await?;
+            let entry = match next {
                 Some(entry) => entry,
                 None if processed > 1 => {
                     return Err(other(
@@ -457,24 +468,28 @@ impl<'a> EntriesFields<'a> {
 impl<'a> Stream for EntriesFields<'a> {
     type Item = io::Result<Entry<'a, io::Empty>>;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<io::Result<Entry<'a, io::Empty>>>> {
+    #[project]
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<io::Result<Entry<'a, io::Empty>>>> {
+        let this = self.project();
         loop {
-            match self.state {
+            #[project]
+            match Pin::new(this.state).project() {
                 EntriesFieldsState::NotPolled => {
-                    self.state =
-                        EntriesFieldsState::Reading(Box::new(self.next_entry()));
-                },
-                EntriesFieldsState::Reading(f) => {
-                    match Pin::new_unchecked(f).as_mut().poll(cx) {
-                        Poll::Pending => return Poll::Pending,
-                        Poll::Ready(r) => {
-                            if r.is_err() {
-                                self.state = EntriesFieldsState::Done;
-                            } else {
-                                self.state = EntriesFieldsState::NotPolled;
-                            }
-                            return Poll::Ready(r.transpose());
+                    // self.state = EntriesFieldsState::Reading(Box::new(self.next_entry()));
+                    unimplemented!()
+                }
+                EntriesFieldsState::Reading(f) => match Pin::new(f).poll(cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(r) => {
+                        if r.is_err() {
+                            self.state = EntriesFieldsState::Done;
+                        } else {
+                            self.state = EntriesFieldsState::NotPolled;
                         }
+                        return Poll::Ready(r.transpose());
                     }
                 },
                 EntriesFieldsState::Done => {
@@ -486,11 +501,23 @@ impl<'a> Stream for EntriesFields<'a> {
 }
 
 impl<'a, R: ?Sized + Read + Unpin> Read for &'a ArchiveInner<R> {
-    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, into: &mut [u8]) -> Poll<io::Result<usize>> {
-        self.obj.borrow_mut().read(into).map(|i| {
-            self.pos.set(self.pos.get() + i as u64);
-            i
-        })
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        into: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        let this_0: Pin<&mut ArchiveInner<R>> = Pin::new(&mut *self);
+        let this = this_0.project();
+        let mut r = this.obj.as_ref().borrow_mut();
+
+        let res = async_std::task::ready!(pin_cell::PinMut::as_mut(&mut r).poll_read(cx, into));
+        match res {
+            Ok(i) => {
+                self.pos.set(self.pos.get() + i as u64);
+                Poll::Ready(Ok(i))
+            }
+            Err(err) => Poll::Ready(Err(err)),
+        }
     }
 }
 
