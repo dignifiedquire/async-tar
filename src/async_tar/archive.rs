@@ -18,7 +18,7 @@ use crate::async_tar::{Entry, GnuExtSparseHeader, GnuSparseHeader, Header};
 /// A top-level representation of an archive file.
 ///
 /// This archive can have an entry added to it and it can be iterated over.
-pub struct Archive<R: ?Sized + Read> {
+pub struct Archive<R: ?Sized + Read + Unpin> {
     inner: ArchiveInner<R>,
 }
 
@@ -32,7 +32,7 @@ pub struct ArchiveInner<R: ?Sized> {
 }
 
 /// An iterator over the entries of an archive.
-pub struct Entries<'a, R: 'a + Read> {
+pub struct Entries<'a, R: 'a + Read + Unpin> {
     fields: EntriesFields<'a>,
     _ignored: marker::PhantomData<&'a Archive<R>>,
 }
@@ -44,7 +44,7 @@ struct EntriesFields<'a> {
     raw: bool,
 }
 
-impl<R: Read> Archive<R> {
+impl<R: Read + Unpin> Archive<R> {
     /// Create a new archive with the underlying object as the reader.
     pub fn new(obj: R) -> Archive<R> {
         Archive {
@@ -71,7 +71,7 @@ impl<R: Read> Archive<R> {
     /// iterator returns), then the contents read for each entry may be
     /// corrupted.
     pub fn entries(&mut self) -> io::Result<Entries<R>> {
-        let me: &mut Archive<dyn Read> = self;
+        let me: &mut Archive<dyn Read + Unpin> = self;
         me._entries().map(|fields| Entries {
             fields: fields,
             _ignored: marker::PhantomData,
@@ -98,7 +98,7 @@ impl<R: Read> Archive<R> {
     /// ar.unpack("foo").await.unwrap();
     /// ```
     pub async fn unpack<P: AsRef<Path>>(&mut self, dst: P) -> io::Result<()> {
-        let me: &mut Archive<dyn Read> = self;
+        let me: &mut Archive<dyn Read + Unpin> = self;
         me._unpack(dst.as_ref()).await
     }
 
@@ -139,7 +139,7 @@ impl<R: Read> Archive<R> {
     }
 }
 
-impl<'a> Archive<dyn Read + 'a> {
+impl<'a> Archive<dyn Read + Unpin + 'a> {
     fn _entries(&mut self) -> io::Result<EntriesFields> {
         if self.inner.pos.get() != 0 {
             return Err(other(
@@ -178,7 +178,7 @@ impl<'a> Archive<dyn Read + 'a> {
     }
 }
 
-impl<'a, R: Read> Entries<'a, R> {
+impl<'a, R: Read + Unpin> Entries<'a, R> {
     /// Indicates whether this iterator will return raw entries or not.
     ///
     /// If the raw list of entries are returned, then no preprocessing happens
@@ -194,7 +194,7 @@ impl<'a, R: Read> Entries<'a, R> {
         }
     }
 }
-impl<'a, R: Read> Iterator for Entries<'a, R> {
+impl<'a, R: Read + Unpin> Iterator for Entries<'a, R> {
     type Item = io::Result<Entry<'a, R>>;
 
     fn next(&mut self) -> Option<io::Result<Entry<'a, R>>> {

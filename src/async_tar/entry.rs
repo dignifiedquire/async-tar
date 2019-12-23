@@ -24,7 +24,7 @@ use crate::async_tar::{Archive, Header, PaxExtensions};
 /// This structure is a window into a portion of a borrowed archive which can
 /// be inspected. It acts as a file handle by implementing the Reader trait. An
 /// entry cannot be rewritten once inserted into an archive.
-pub struct Entry<'a, R: 'a + Read> {
+pub struct Entry<'a, R: 'a + Read + Unpin> {
     fields: EntryFields<'a>,
     _ignored: marker::PhantomData<&'a Archive<R>>,
 }
@@ -62,7 +62,7 @@ pub enum Unpacked {
     __Nonexhaustive,
 }
 
-impl<'a, R: Read> Entry<'a, R> {
+impl<'a, R: Read + Unpin> Entry<'a, R> {
     /// Returns the path name for this entry.
     ///
     /// This method may fail if the pathname is not valid Unicode and this is
@@ -254,7 +254,7 @@ impl<'a, R: Read> Entry<'a, R> {
     }
 }
 
-impl<'a, R: Read> Read for Entry<'a, R> {
+impl<'a, R: Read + Unpin> Read for Entry<'a, R> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -266,11 +266,11 @@ impl<'a, R: Read> Read for Entry<'a, R> {
 }
 
 impl<'a> EntryFields<'a> {
-    pub fn from<R: Read>(entry: Entry<R>) -> EntryFields {
+    pub fn from<R: Read + Unpin>(entry: Entry<R>) -> EntryFields {
         entry.fields
     }
 
-    pub fn into_entry<R: Read>(self) -> Entry<'a, R> {
+    pub fn into_entry<R: Read + Unpin>(self) -> Entry<'a, R> {
         Entry {
             fields: self,
             _ignored: marker::PhantomData,
