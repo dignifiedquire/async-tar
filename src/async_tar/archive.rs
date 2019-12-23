@@ -527,15 +527,10 @@ impl<R: Read + Unpin> Stream for EntriesFields<R> {
     type Item = io::Result<Entry<Archive<R>>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let s = &mut self.state;
         loop {
-            match s {
+            match self.state {
                 EntriesFieldsState::NotPolled => {
-                    let state =
-                        EntriesFieldsState::Reading(Box::pin(
-                            async move { self.next_entry().await },
-                        ));
-                    self.state = state;
+                    self.state = EntriesFieldsState::Reading(Box::pin(self.next_entry()));
                 }
                 EntriesFieldsState::Reading(ref mut f) => match Pin::new(f).poll(cx) {
                     Poll::Pending => return Poll::Pending,
