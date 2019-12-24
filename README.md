@@ -1,60 +1,86 @@
-# tar-rs
+<h1 align="center">async-tar</h1>
+<div align="center">
+ <strong>
+   A tar archive reading/writing library for async Rust.
+ </strong>
+</div>
 
-[Documentation](https://docs.rs/tar)
+<br />
 
-A tar archive reading/writing library for Rust.
+<div align="center">
+  <!-- Crates version -->
+  <a href="https://crates.io/crates/async-tar">
+    <img src="https://img.shields.io/crates/v/async-tar.svg?style=flat-square"
+    alt="Crates.io version" />
+  </a>
+  <!-- Downloads -->
+  <a href="https://crates.io/crates/async-tar">
+    <img src="https://img.shields.io/crates/d/async-tar.svg?style=flat-square"
+      alt="Download" />
+  </a>
+  <!-- docs.rs docs -->
+  <a href="https://docs.rs/async-tar">
+    <img src="https://img.shields.io/badge/docs-latest-blue.svg?style=flat-square"
+      alt="docs.rs docs" />
+  </a>
+</div>
+
+<div align="center">
+  <h3>
+    <a href="https://docs.rs/async-tar">
+      API Docs
+    </a>
+    <span> | </span>
+    <a href="https://github.com/dignifiedquire/async-tar/releases">
+      Releases
+    </a>
+  </h3>
+</div>
+<br/>
+
+> Forked from the greate [tar-rs](https://github.com/alexcrichton/tar-rs).
 
 ```toml
 # Cargo.toml
 [dependencies]
-tar = "0.4"
+async_tar = "0.4"
 ```
 
 ## Reading an archive
 
 ```rust,no_run
-extern crate tar;
+use async_std::io::stdin;
+use async_std::prelude::*;
 
-use std::io::prelude::*;
-use std::fs::File;
-use tar::Archive;
+use async_tar::Archive;
 
 fn main() {
-    let file = File::open("foo.tar").unwrap();
-    let mut a = Archive::new(file);
-
-    for file in a.entries().unwrap() {
-        // Make sure there wasn't an I/O error
-        let mut file = file.unwrap();
-
-        // Inspect metadata about the file
-        println!("{:?}", file.header().path().unwrap());
-        println!("{}", file.header().size().unwrap());
-
-        // files implement the Read trait
-        let mut s = String::new();
-        file.read_to_string(&mut s).unwrap();
-        println!("{}", s);
-    }
+    async_std::task::block_on(async {
+        let mut ar = Archive::new(stdin());
+        while let Some(file) = ar.entries().unwrap().next().await {
+            let f = file.unwrap();
+            println!("{}", f.path().unwrap().display());
+        }
+    });
 }
-
 ```
 
 ## Writing an archive
 
 ```rust,no_run
-extern crate tar;
-
-use std::io::prelude::*;
-use std::fs::File;
-use tar::Builder;
+use async_std::fs::File;
+use async_tar::Builder;
 
 fn main() {
-    let file = File::create("foo.tar").unwrap();
-    let mut a = Builder::new(file);
+    async_std::task::block_on(async {
+        let file = File::create("foo.tar").await.unwrap();
+        let mut a = Builder::new(file);
 
-    a.append_path("file1.txt").unwrap();
-    a.append_file("file2.txt", &mut File::open("file3.txt").unwrap()).unwrap();
+        a.append_path("README.md").await.unwrap();
+        a.append_file("lib.rs", &mut File::open("src/lib.rs").await.unwrap())
+            .await
+            .unwrap();
+    });
 }
 ```
 
