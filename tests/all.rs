@@ -1,5 +1,5 @@
+extern crate async_tar;
 extern crate filetime;
-extern crate tar;
 extern crate tempfile;
 #[cfg(all(unix, feature = "xattr"))]
 extern crate xattr;
@@ -10,8 +10,8 @@ use async_std::path::{Path, PathBuf};
 use async_std::prelude::*;
 use std::iter::repeat;
 
+use async_tar::{Archive, ArchiveBuilder, Builder, EntryType, Header};
 use filetime::FileTime;
-use tar::{Archive, ArchiveBuilder, Builder, EntryType, Header};
 use tempfile::{Builder as TempBuilder, TempDir};
 
 macro_rules! t {

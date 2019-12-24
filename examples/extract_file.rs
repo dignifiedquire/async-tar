@@ -4,14 +4,14 @@
 //! name as the first argument provided, and then prints the contents of that
 //! file to stdout.
 
-extern crate tar;
+extern crate async_tar;
 
 use async_std::io::{copy, stdin, stdout};
 use async_std::path::Path;
 use async_std::prelude::*;
 use std::env::args_os;
 
-use tar::Archive;
+use async_tar::Archive;
 
 fn main() {
     async_std::task::block_on(async {

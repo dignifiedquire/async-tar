@@ -2,12 +2,12 @@
 //!
 //! Takes a tarball on stdin and prints out all of the entries inside.
 
-extern crate tar;
+extern crate async_tar;
 
 use async_std::io::stdin;
 use async_std::prelude::*;
 
-use tar::Archive;
+use async_tar::Archive;
 
 fn main() {
     async_std::task::block_on(async {

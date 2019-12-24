@@ -1,7 +1,7 @@
-extern crate tar;
+extern crate async_tar;
 
 use async_std::fs::File;
-use tar::Builder;
+use async_tar::Builder;
 
 fn main() {
     async_std::task::block_on(async {

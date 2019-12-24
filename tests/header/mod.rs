@@ -5,7 +5,7 @@ use std::{iter, mem, thread, time};
 
 use tempfile::Builder;
 
-use tar::{GnuHeader, Header, HeaderMode};
+use async_tar::{GnuHeader, Header, HeaderMode};
 
 #[test]
 fn default_gnu() {
