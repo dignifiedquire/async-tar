@@ -38,11 +38,26 @@ jobs:
     - run: cargo test
     - run: cargo test --no-default-features
 
-  rustfmt:
-    name: Rustfmt
+  check_fmt_and_docs:
+    name: Checking fmt and docs
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@master
-    - name: Install Rust
-      run: rustup update stable && rustup default stable && rustup component add rustfmt
-    - run: cargo fmt -- --check
+
+    - uses: actions-rs/toolchain@v1
+      with:
+          profile: minimal
+          toolchain: nightly
+          override: true
+          components: rustfmt
+
+    - name: setup
+      run: |
+        rustup component add rustfmt
+        rustc --version
+
+    - name: fmt
+      run: cargo fmt --all -- --check
+
+    - name: Docs
+      run: cargo doc --features docs

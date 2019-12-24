@@ -817,7 +817,7 @@ impl<R: Read + Unpin> EntryFields<R> {
             not(feature = "xattr"),
             target_arch = "wasm32"
         ))]
-        fn set_xattrs(_: &mut EntryFields, _: &Path) -> io::Result<()> {
+        async fn set_xattrs<R: Read + Unpin>(_: &mut EntryFields<R>, _: &Path) -> io::Result<()> {
             Ok(())
         }
     }
