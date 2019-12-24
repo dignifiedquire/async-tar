@@ -1,7 +1,7 @@
 //! Async tar
 use async_std::io::{Error, ErrorKind};
 
-pub use crate::async_tar::archive::{Archive, Entries};
+pub use crate::async_tar::archive::Archive;
 pub use crate::async_tar::builder::Builder;
 pub use crate::async_tar::entry::{Entry, Unpacked};
 pub use crate::async_tar::entry_type::EntryType;

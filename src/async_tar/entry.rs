@@ -2,13 +2,13 @@ use std::borrow::Cow;
 use std::cmp;
 use std::marker;
 use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use async_std::fs;
 use async_std::fs::OpenOptions;
 use async_std::io::prelude::*;
 use async_std::io::{self, Error, ErrorKind, SeekFrom};
 use async_std::path::{Component, Path, PathBuf};
-use async_std::task::{Context, Poll};
 use pin_project::{pin_project, project};
 
 use filetime::{self, FileTime};
@@ -281,6 +281,21 @@ impl<R: Read + Unpin> EntryFields<R> {
         Entry {
             fields: self,
             _ignored: marker::PhantomData,
+        }
+    }
+
+    pub(crate) fn poll_read_all(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<Vec<u8>>> {
+        // Preallocate some data but don't let ourselves get too crazy now.
+        let cap = cmp::min(self.size, 128 * 1024);
+        let mut buf = Vec::with_capacity(cap as usize);
+
+        // Copied from futures::ReadToEnd
+        match async_std::task::ready!(poll_read_all_internal(self, cx, &mut buf)) {
+            Ok(_) => Poll::Ready(Ok(buf)),
+            Err(err) => Poll::Ready(Err(err)),
         }
     }
 
@@ -839,4 +854,55 @@ impl<R: Read + Unpin> Read for EntryIo<R> {
             EntryIo::Data(io) => io.poll_read(cx, into),
         }
     }
+}
+
+struct Guard<'a> {
+    buf: &'a mut Vec<u8>,
+    len: usize,
+}
+
+impl Drop for Guard<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            self.buf.set_len(self.len);
+        }
+    }
+}
+
+fn poll_read_all_internal<R: Read + ?Sized>(
+    mut rd: Pin<&mut R>,
+    cx: &mut Context<'_>,
+    buf: &mut Vec<u8>,
+) -> Poll<io::Result<usize>> {
+    let mut g = Guard {
+        len: buf.len(),
+        buf,
+    };
+    let ret;
+    loop {
+        if g.len == g.buf.len() {
+            unsafe {
+                g.buf.reserve(32);
+                let capacity = g.buf.capacity();
+                g.buf.set_len(capacity);
+
+                let buf = &mut g.buf[g.len..];
+                std::ptr::write_bytes(buf.as_mut_ptr(), 0, buf.len());
+            }
+        }
+
+        match async_std::task::ready!(rd.as_mut().poll_read(cx, &mut g.buf[g.len..])) {
+            Ok(0) => {
+                ret = Poll::Ready(Ok(g.len));
+                break;
+            }
+            Ok(n) => g.len += n,
+            Err(e) => {
+                ret = Poll::Ready(Err(e));
+                break;
+            }
+        }
+    }
+
+    ret
 }
