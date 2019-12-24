@@ -567,7 +567,7 @@ impl<R: Read + Unpin> EntryFields<R> {
                     )
                 })?;
             } else {
-                symlink(&src, dst).map_err(|err| {
+                symlink(&src, dst).await.map_err(|err| {
                     Error::new(
                         err.kind(),
                         format!(
@@ -583,18 +583,18 @@ impl<R: Read + Unpin> EntryFields<R> {
 
             #[cfg(target_arch = "wasm32")]
             #[allow(unused_variables)]
-            fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
+            async fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
                 Err(io::Error::new(io::ErrorKind::Other, "Not implemented"))
             }
 
             #[cfg(windows)]
-            fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
-                ::std::os::windows::fs::symlink_file(src, dst)
+            async fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
+                async_std::os::windows::fs::symlink_file(src, dst).await
             }
 
             #[cfg(any(unix, target_os = "redox"))]
-            fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
-                ::std::os::unix::fs::symlink(src, dst)
+            async fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
+                async_std::os::unix::fs::symlink(src, dst).await
             }
         } else if kind.is_pax_global_extensions()
             || kind.is_pax_local_extensions()
@@ -732,9 +732,9 @@ impl<R: Read + Unpin> EntryFields<R> {
         }
 
         #[cfg(windows)]
-        fn _set_perms(
+        async fn _set_perms(
             dst: &Path,
-            f: Option<&mut std::fs::File>,
+            f: Option<&mut fs::File>,
             mode: u32,
             _preserve: bool,
         ) -> io::Result<()> {
@@ -743,23 +743,23 @@ impl<R: Read + Unpin> EntryFields<R> {
             }
             match f {
                 Some(f) => {
-                    let mut perm = f.metadata()?.permissions();
+                    let mut perm = f.metadata().await?.permissions();
                     perm.set_readonly(true);
-                    f.set_permissions(perm)
+                    f.set_permissions(perm).await
                 }
                 None => {
-                    let mut perm = fs::metadata(dst)?.permissions();
+                    let mut perm = fs::metadata(dst).await?.permissions();
                     perm.set_readonly(true);
-                    fs::set_permissions(dst, perm)
+                    fs::set_permissions(dst, perm).await
                 }
             }
         }
 
         #[cfg(target_arch = "wasm32")]
         #[allow(unused_variables)]
-        fn _set_perms(
+        async fn _set_perms(
             dst: &Path,
-            f: Option<&mut std::fs::File>,
+            f: Option<&mut fs::File>,
             mode: u32,
             _preserve: bool,
         ) -> io::Result<()> {
