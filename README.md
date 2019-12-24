@@ -38,13 +38,7 @@
 </div>
 <br/>
 
-> Forked from the greate [tar-rs](https://github.com/alexcrichton/tar-rs).
-
-```toml
-# Cargo.toml
-[dependencies]
-async_tar = "0.4"
-```
+> Based on the great [tar-rs](https://github.com/alexcrichton/tar-rs).
 
 ## Reading an archive
 

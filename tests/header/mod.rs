@@ -170,7 +170,7 @@ fn set_ustar_path_hard() {
 
 #[test]
 fn set_metadata_deterministic() {
-    let td = t!(Builder::new().prefix("tar-rs").tempdir());
+    let td = t!(Builder::new().prefix("async-tar").tempdir());
     let tmppath = td.path().join("tmpfile");
 
     fn mk_header(path: &Path, readonly: bool) -> Result<Header, io::Error> {

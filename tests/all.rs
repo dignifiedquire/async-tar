@@ -137,7 +137,7 @@ async fn reading_files() {
 #[async_std::test]
 async fn writing_files() {
     let mut ar = Builder::new(Vec::new());
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
 
     let path = td.path().join("test");
     t!(t!(File::create(&path).await).write_all(b"test").await);
@@ -163,7 +163,7 @@ async fn writing_files() {
 #[async_std::test]
 async fn large_filename() {
     let mut ar = Builder::new(Vec::new());
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
 
     let path = td.path().join("test");
     t!(t!(File::create(&path).await).write_all(b"test").await);
@@ -254,7 +254,7 @@ async fn check_dirtree(td: &TempDir) {
 
 #[async_std::test]
 async fn extracting_directories() {
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
     let rdr = Cursor::new(tar!("directory.tar"));
     let mut ar = Archive::new(rdr);
     t!(ar.unpack(td.path()).await);
@@ -266,7 +266,9 @@ async fn extracting_directories() {
 async fn xattrs() {
     // If /tmp is a tmpfs, xattr will fail
     // The xattr crate's unit tests also use /var/tmp for this reason
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir_in("/var/tmp"));
+    let td = t!(TempBuilder::new()
+        .prefix("async-tar")
+        .tempdir_in("/var/tmp"));
     let rdr = Cursor::new(tar!("xattrs.tar"));
     let builder = ArchiveBuilder::new(rdr).set_unpack_xattrs(true);
     let mut ar = builder.build();
@@ -281,7 +283,9 @@ async fn xattrs() {
 async fn no_xattrs() {
     // If /tmp is a tmpfs, xattr will fail
     // The xattr crate's unit tests also use /var/tmp for this reason
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir_in("/var/tmp"));
+    let td = t!(TempBuilder::new()
+        .prefix("async-tar")
+        .tempdir_in("/var/tmp"));
     let rdr = Cursor::new(tar!("xattrs.tar"));
     let builder = ArchiveBuilder::new(rdr).set_unpack_xattrs(false);
     let mut ar = builder.build();
@@ -295,7 +299,7 @@ async fn no_xattrs() {
 
 #[async_std::test]
 async fn writing_and_extracting_directories() {
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
 
     let mut ar = Builder::new(Vec::new());
     let tmppath = td.path().join("tmpfile");
@@ -315,7 +319,7 @@ async fn writing_and_extracting_directories() {
 
 #[async_std::test]
 async fn writing_directories_recursively() {
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
 
     let base_dir = td.path().join("base");
     t!(fs::create_dir(&base_dir).await);
@@ -358,7 +362,7 @@ async fn writing_directories_recursively() {
 
 #[async_std::test]
 async fn append_dir_all_blank_dest() {
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
 
     let base_dir = td.path().join("base");
     t!(fs::create_dir(&base_dir).await);
@@ -404,7 +408,7 @@ async fn append_dir_all_blank_dest() {
 
 #[async_std::test]
 async fn append_dir_all_does_not_work_on_non_directory() {
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
     let path = td.path().join("test");
     t!(t!(File::create(&path).await).write_all(b"test").await);
 
@@ -415,7 +419,7 @@ async fn append_dir_all_does_not_work_on_non_directory() {
 
 #[async_std::test]
 async fn extracting_duplicate_dirs() {
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
     let rdr = Cursor::new(tar!("duplicate_dirs.tar"));
     let mut ar = Archive::new(rdr);
     t!(ar.unpack(td.path()).await);
@@ -429,7 +433,7 @@ async fn extracting_duplicate_dirs() {
 
 #[async_std::test]
 async fn unpack_old_style_bsd_dir() {
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
 
     let mut ar = Builder::new(Vec::new());
 
@@ -455,7 +459,7 @@ async fn unpack_old_style_bsd_dir() {
 
 #[async_std::test]
 async fn handling_incorrect_file_size() {
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
 
     let mut ar = Builder::new(Vec::new());
 
@@ -482,7 +486,7 @@ async fn handling_incorrect_file_size() {
 
 #[async_std::test]
 async fn extracting_malicious_tarball() {
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
 
     let mut evil_tar = Vec::new();
 
@@ -596,7 +600,7 @@ async fn octal_spaces() {
 
 #[async_std::test]
 async fn extracting_malformed_tar_null_blocks() {
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
 
     let mut ar = Builder::new(Vec::new());
 
@@ -623,7 +627,7 @@ async fn extracting_malformed_tar_null_blocks() {
 
 #[async_std::test]
 async fn empty_filename() {
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
     let rdr = Cursor::new(tar!("empty_filename.tar"));
     let mut ar = Archive::new(rdr);
     assert!(ar.unpack(td.path()).await.is_ok());
@@ -631,7 +635,7 @@ async fn empty_filename() {
 
 #[async_std::test]
 async fn file_times() {
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
     let rdr = Cursor::new(tar!("file_times.tar"));
     let mut ar = Archive::new(rdr);
     t!(ar.unpack(td.path()).await);
@@ -648,7 +652,7 @@ async fn file_times() {
 #[async_std::test]
 async fn backslash_treated_well() {
     // Insert a file into an archive with a backslash
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
     let mut ar = Builder::new(Vec::<u8>::new());
     t!(ar.append_dir("foo\\bar", td.path()).await);
     let mut ar = Archive::new(Cursor::new(t!(ar.into_inner().await)));
@@ -686,7 +690,7 @@ async fn nul_bytes_in_path() {
     use std::os::unix::prelude::*;
 
     let nul_path = OsStr::from_bytes(b"foo\0");
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
     let mut ar = Builder::new(Vec::<u8>::new());
     let err = ar.append_dir(nul_path, td.path()).await.unwrap_err();
     assert!(err.to_string().contains("contains a nul byte"));
@@ -708,7 +712,7 @@ async fn links() {
 #[async_std::test]
 #[cfg(unix)] // making symlinks on windows is hard
 async fn unpack_links() {
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
     let mut ar = Archive::new(Cursor::new(tar!("link.tar")));
     t!(ar.unpack(td.path()).await);
 
@@ -802,7 +806,7 @@ async fn long_linkname_trailing_nul() {
 
 #[async_std::test]
 async fn encoded_long_name_has_trailing_nul() {
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
     let path = td.path().join("foo");
     t!(t!(File::create(&path).await).write_all(b"test").await);
 
@@ -884,7 +888,7 @@ async fn reading_sparse() {
 async fn extract_sparse() {
     let rdr = Cursor::new(tar!("sparse.tar"));
     let mut ar = Archive::new(rdr);
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
     t!(ar.unpack(td.path()).await);
 
     let mut s = String::new();
@@ -932,7 +936,7 @@ async fn extract_sparse() {
 #[async_std::test]
 async fn path_separators() {
     let mut ar = Builder::new(Vec::new());
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
 
     let path = td.path().join("test");
     t!(t!(File::create(&path).await).write_all(b"test").await);
@@ -984,7 +988,7 @@ async fn append_path_symlink() {
 
     let mut ar = Builder::new(Vec::new());
     ar.follow_symlinks(false);
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
 
     let long_linkname = repeat("abcd").take(30).collect::<String>();
     let long_pathname = repeat("dcba").take(30).collect::<String>();
@@ -1032,7 +1036,7 @@ async fn append_path_symlink() {
 
 #[async_std::test]
 async fn name_with_slash_doesnt_fool_long_link_and_bsd_compat() {
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
 
     let mut ar = Builder::new(Vec::new());
 
@@ -1066,7 +1070,7 @@ async fn name_with_slash_doesnt_fool_long_link_and_bsd_compat() {
 #[async_std::test]
 async fn insert_local_file_different_name() {
     let mut ar = Builder::new(Vec::new());
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
     let path = td.path().join("directory");
     t!(fs::create_dir(&path).await);
     ar.append_path_with_name(&path, "archive/dir")
@@ -1093,7 +1097,7 @@ async fn insert_local_file_different_name() {
 async fn tar_directory_containing_symlink_to_directory() {
     use std::os::unix::fs::symlink;
 
-    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
     let dummy_src = t!(TempBuilder::new().prefix("dummy_src").tempdir());
     let dummy_dst = td.path().join("dummy_dst");
     let mut ar = Builder::new(Vec::new());

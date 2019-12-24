@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Vendored from https://github.com/withoutboats/pin-cell until a new release is made.
 //!
 //! This library defines the `PinCell` type, a pinning variant of the standard
