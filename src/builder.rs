@@ -588,20 +588,12 @@ async fn append_dir_all(
     let mut stack = vec![(src_path.to_path_buf(), true, false)];
     while let Some((src, is_dir, is_symlink)) = stack.pop() {
         let dest = path.join(src.strip_prefix(&src_path).unwrap());
-        println!(
-            "appending {} - {} - {} - {}",
-            dest.display(),
-            src.display(),
-            is_dir,
-            is_symlink
-        );
 
         // In case of a symlink pointing to a directory, is_dir is false, but src.is_dir() will return true
         if is_dir || (is_symlink && follow && src.is_dir().await) {
             let mut entries = fs::read_dir(&src).await?;
             while let Some(entry) = entries.next().await {
                 let entry = entry?;
-                println!("pushing {:?}", entry);
                 let file_type = entry.file_type().await?;
                 stack.push((entry.path(), file_type.is_dir(), file_type.is_symlink()));
             }
