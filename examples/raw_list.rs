@@ -13,7 +13,8 @@ fn main() {
     async_std::task::block_on(async {
         let mut ar = Archive::new(stdin());
         let mut i = 0;
-        while let Some(file) = ar.entries_raw().unwrap().next().await {
+        let mut entries = ar.entries_raw().unwrap();
+        while let Some(file) = entries.next().await {
             println!("-------------------------- Entry {}", i);
             let mut f = file.unwrap();
             println!("path: {}", f.path().unwrap().display());

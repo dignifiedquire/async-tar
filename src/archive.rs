@@ -20,6 +20,7 @@ use crate::{Entry, GnuExtSparseHeader, GnuSparseHeader, Header};
 /// A top-level representation of an archive file.
 ///
 /// This archive can have an entry added to it and it can be iterated over.
+#[derive(Debug)]
 pub struct Archive<R: Read + Unpin> {
     inner: Arc<ArchiveInner<R>>,
 }
@@ -33,6 +34,7 @@ impl<R: Read + Unpin> Clone for Archive<R> {
 }
 
 #[pin_project]
+#[derive(Debug)]
 pub struct ArchiveInner<R> {
     pos: Cell<u64>,
     unpack_xattrs: bool,
@@ -214,10 +216,10 @@ impl<R: Read + Unpin + Sync + Send> Archive<R> {
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
     /// #
     /// use async_std::fs::File;
-    /// use tar::Archive;
+    /// use async_tar::Archive;
     ///
-    /// let mut ar = Archive::new(File::open("foo.tar").await.unwrap());
-    /// ar.unpack("foo").await.unwrap();
+    /// let mut ar = Archive::new(File::open("foo.tar").await?);
+    /// ar.unpack("foo").await?;
     /// #
     /// # Ok(()) }) }
     /// ```

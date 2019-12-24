@@ -1,8 +1,7 @@
 use std::borrow::Cow;
-use std::cmp;
-use std::marker;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::{cmp, fmt, marker};
 
 use async_std::fs;
 use async_std::fs::OpenOptions;
@@ -31,6 +30,14 @@ pub struct Entry<R: Read + Unpin> {
     _ignored: marker::PhantomData<Archive<R>>,
 }
 
+impl<R: Read + Unpin> fmt::Debug for Entry<R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Entry")
+            .field("fields", &self.fields)
+            .finish()
+    }
+}
+
 // private implementation detail of `Entry`, but concrete (no type parameters)
 // and also all-public to be constructed from other modules.
 #[pin_project]
@@ -51,10 +58,38 @@ pub struct EntryFields<R: Read + Unpin> {
     pub(crate) read_state: Option<EntryIo<R>>,
 }
 
+impl<R: Read + Unpin> fmt::Debug for EntryFields<R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EntryFields")
+            .field("long_pathname", &self.long_pathname)
+            .field("long_linkname", &self.long_linkname)
+            .field("pax_extensions", &self.pax_extensions)
+            .field("header", &self.header)
+            .field("size", &self.size)
+            .field("header_pos", &self.header_pos)
+            .field("file_pos", &self.file_pos)
+            .field("data", &self.data)
+            .field("unpack_xattrs", &self.unpack_xattrs)
+            .field("preserve_permissions", &self.preserve_permissions)
+            .field("preserve_mtime", &self.preserve_mtime)
+            .field("read_state", &self.read_state)
+            .finish()
+    }
+}
+
 #[pin_project]
 pub enum EntryIo<R: Read + Unpin> {
     Pad(#[pin] io::Take<io::Repeat>),
     Data(#[pin] io::Take<R>),
+}
+
+impl<R: Read + Unpin> fmt::Debug for EntryIo<R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EntryIo::Pad(_) => write!(f, "EntryIo::Pad"),
+            EntryIo::Data(_) => write!(f, "EntryIo::Data"),
+        }
+    }
 }
 
 /// When unpacking items the unpacked thing is returned to allow custom
@@ -190,15 +225,22 @@ impl<R: Read + Unpin> Entry<R> {
     /// # Examples
     ///
     /// ```no_run
-    /// use std::fs::File;
-    /// use tar::Archive;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// #
+    /// use async_std::fs::File;
+    /// use async_std::prelude::*;
+    /// use async_tar::Archive;
     ///
-    /// let mut ar = Archive::new(File::open("foo.tar").unwrap());
-    ///
-    /// for (i, file) in ar.entries().unwrap().enumerate() {
-    ///     let mut file = file.unwrap();
-    ///     file.unpack(format!("file-{}", i)).unwrap();
+    /// let mut ar = Archive::new(File::open("foo.tar").await?);
+    /// let mut entries = ar.entries()?;
+    /// let mut i = 0;
+    /// while let Some(file) = entries.next().await {
+    ///     let mut file = file?;
+    ///     file.unpack(format!("file-{}", i)).await?;
+    ///     i += 1;
     /// }
+    /// #
+    /// # Ok(()) }) }
     /// ```
     pub async fn unpack<P: AsRef<Path>>(&mut self, dst: P) -> io::Result<Unpacked> {
         self.fields.unpack(None, dst.as_ref()).await
@@ -218,15 +260,22 @@ impl<R: Read + Unpin> Entry<R> {
     /// # Examples
     ///
     /// ```no_run
-    /// use std::fs::File;
-    /// use tar::Archive;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// #
+    /// use async_std::fs::File;
+    /// use async_tar::Archive;
+    /// use async_std::prelude::*;
     ///
-    /// let mut ar = Archive::new(File::open("foo.tar").unwrap());
-    ///
-    /// for (i, file) in ar.entries().unwrap().enumerate() {
+    /// let mut ar = Archive::new(File::open("foo.tar").await?);
+    /// let mut entries = ar.entries()?;
+    /// let mut i = 0;
+    /// while let Some(file) = entries.next().await {
     ///     let mut file = file.unwrap();
-    ///     file.unpack_in("target").unwrap();
+    ///     file.unpack_in("target").await?;
+    ///     i += 1;
     /// }
+    /// #
+    /// # Ok(()) }) }
     /// ```
     pub async fn unpack_in<P: AsRef<Path>>(&mut self, dst: P) -> io::Result<bool> {
         self.fields.unpack_in(dst.as_ref()).await
@@ -809,32 +858,40 @@ impl<R: Read + Unpin> Read for EntryFields<R> {
         into: &mut [u8],
     ) -> Poll<io::Result<usize>> {
         let mut this = self.project();
+        println!("-- poll_read state {:?}", &this.read_state);
         loop {
             if this.read_state.is_none() {
+                println!("  {}", this.data.len());
                 if this.data.as_ref().is_empty() {
                     *this.read_state = None;
                 } else {
-                    *this.read_state = Some(this.data.get_mut().remove(0));
+                    let data = &mut *this.data;
+                    *this.read_state = Some(data.remove(0));
                 }
             }
 
-            let mut read_state = (&mut *this.read_state).take();
-
-            if let Some(ref mut io) = read_state {
-                match Pin::new(io).poll_read(cx, into) {
+            if let Some(ref mut io) = &mut *this.read_state {
+                let ret = Pin::new(io).poll_read(cx, into);
+                match ret {
                     Poll::Ready(Ok(0)) => {
-                        return Poll::Ready(Ok(0));
+                        *this.read_state = None;
+                        if this.data.as_ref().is_empty() {
+                            return Poll::Ready(Ok(0));
+                        }
+                        continue;
                     }
-                    Poll::Ready(val) => {
-                        *this.read_state = read_state;
-                        return Poll::Ready(val);
+                    Poll::Ready(Ok(val)) => {
+                        return Poll::Ready(Ok(val));
+                    }
+                    Poll::Ready(Err(err)) => {
+                        return Poll::Ready(Err(err));
                     }
                     Poll::Pending => {
-                        *this.read_state = read_state;
                         return Poll::Pending;
                     }
                 }
             } else {
+                // Unable to pull another value from `data`, so we are done.
                 return Poll::Ready(Ok(0));
             }
         }

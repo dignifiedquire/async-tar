@@ -95,18 +95,22 @@ impl<W: Write + Unpin> Builder<W> {
     /// # Examples
     ///
     /// ```
-    /// use tar::{Builder, Header};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// #
+    /// use async_tar::{Builder, Header};
     ///
     /// let mut header = Header::new_gnu();
-    /// header.set_path("foo").unwrap();
+    /// header.set_path("foo")?;
     /// header.set_size(4);
     /// header.set_cksum();
     ///
     /// let mut data: &[u8] = &[1, 2, 3, 4];
     ///
     /// let mut ar = Builder::new(Vec::new());
-    /// ar.append(&header, data).unwrap();
-    /// let data = ar.into_inner().unwrap();
+    /// ar.append(&header, data).await?;
+    /// let data = ar.into_inner().await?;
+    /// #
+    /// # Ok(()) }) }
     /// ```
     pub async fn append<R: Read + Unpin>(
         &mut self,
@@ -146,7 +150,9 @@ impl<W: Write + Unpin> Builder<W> {
     /// # Examples
     ///
     /// ```
-    /// use tar::{Builder, Header};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// #
+    /// use async_tar::{Builder, Header};
     ///
     /// let mut header = Header::new_gnu();
     /// header.set_size(4);
@@ -155,8 +161,10 @@ impl<W: Write + Unpin> Builder<W> {
     /// let mut data: &[u8] = &[1, 2, 3, 4];
     ///
     /// let mut ar = Builder::new(Vec::new());
-    /// ar.append_data(&mut header, "really/long/path/to/foo", data).unwrap();
-    /// let data = ar.into_inner().unwrap();
+    /// ar.append_data(&mut header, "really/long/path/to/foo", data).await?;
+    /// let data = ar.into_inner().await?;
+    /// #
+    /// # Ok(()) }) }
     /// ```
     pub async fn append_data<P: AsRef<Path>, R: Read + Unpin>(
         &mut self,
@@ -189,11 +197,15 @@ impl<W: Write + Unpin> Builder<W> {
     /// # Examples
     ///
     /// ```no_run
-    /// use tar::Builder;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// #
+    /// use async_tar::Builder;
     ///
     /// let mut ar = Builder::new(Vec::new());
     ///
-    /// ar.append_path("foo/bar.txt").unwrap();
+    /// ar.append_path("foo/bar.txt").await?;
+    /// #
+    /// # Ok(()) }) }
     /// ```
     pub async fn append_path<P: AsRef<Path>>(&mut self, path: P) -> io::Result<()> {
         let mode = self.mode.clone();
@@ -219,13 +231,17 @@ impl<W: Write + Unpin> Builder<W> {
     /// # Examples
     ///
     /// ```no_run
-    /// use tar::Builder;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// #
+    /// use async_tar::Builder;
     ///
     /// let mut ar = Builder::new(Vec::new());
     ///
     /// // Insert the local file "foo/bar.txt" in the archive but with the name
     /// // "bar/foo.txt".
-    /// ar.append_path_with_name("foo/bar.txt", "bar/foo.txt").unwrap();
+    /// ar.append_path_with_name("foo/bar.txt", "bar/foo.txt").await?;
+    /// #
+    /// # Ok(()) }) }
     /// ```
     pub async fn append_path_with_name<P: AsRef<Path>, N: AsRef<Path>>(
         &mut self,
@@ -261,15 +277,19 @@ impl<W: Write + Unpin> Builder<W> {
     /// # Examples
     ///
     /// ```no_run
-    /// use std::fs::File;
-    /// use tar::Builder;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// #
+    /// use async_std::fs::File;
+    /// use async_tar::Builder;
     ///
     /// let mut ar = Builder::new(Vec::new());
     ///
     /// // Open the file at one location, but insert it into the archive with a
     /// // different name.
-    /// let mut f = File::open("foo/bar/baz.txt").unwrap();
-    /// ar.append_file("bar/baz.txt", &mut f).unwrap();
+    /// let mut f = File::open("foo/bar/baz.txt").await?;
+    /// ar.append_file("bar/baz.txt", &mut f).await?;
+    /// #
+    /// # Ok(()) }) }
     /// ```
     pub async fn append_file<P: AsRef<Path>>(
         &mut self,
@@ -297,14 +317,18 @@ impl<W: Write + Unpin> Builder<W> {
     /// # Examples
     ///
     /// ```
-    /// use std::fs;
-    /// use tar::Builder;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// #
+    /// use async_std::fs;
+    /// use async_tar::Builder;
     ///
     /// let mut ar = Builder::new(Vec::new());
     ///
     /// // Use the directory at one location, but insert it into the archive
     /// // with a different name.
-    /// ar.append_dir("bardir", ".").unwrap();
+    /// ar.append_dir("bardir", ".").await?;
+    /// #
+    /// # Ok(()) }) }
     /// ```
     pub async fn append_dir<P, Q>(&mut self, path: P, src_path: Q) -> io::Result<()>
     where
@@ -329,14 +353,18 @@ impl<W: Write + Unpin> Builder<W> {
     /// # Examples
     ///
     /// ```
-    /// use std::fs;
-    /// use tar::Builder;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// #
+    /// use async_std::fs;
+    /// use async_tar::Builder;
     ///
     /// let mut ar = Builder::new(Vec::new());
     ///
     /// // Use the directory at one location, but insert it into the archive
     /// // with a different name.
-    /// ar.append_dir_all("bardir", ".").unwrap();
+    /// ar.append_dir_all("bardir", ".").await?;
+    /// #
+    /// # Ok(()) }) }
     /// ```
     pub async fn append_dir_all<P, Q>(&mut self, path: P, src_path: Q) -> io::Result<()>
     where
@@ -560,10 +588,20 @@ async fn append_dir_all(
     let mut stack = vec![(src_path.to_path_buf(), true, false)];
     while let Some((src, is_dir, is_symlink)) = stack.pop() {
         let dest = path.join(src.strip_prefix(&src_path).unwrap());
+        println!(
+            "appending {} - {} - {} - {}",
+            dest.display(),
+            src.display(),
+            is_dir,
+            is_symlink
+        );
+
         // In case of a symlink pointing to a directory, is_dir is false, but src.is_dir() will return true
         if is_dir || (is_symlink && follow && src.is_dir().await) {
-            while let Some(entry) = fs::read_dir(&src).await?.next().await {
+            let mut entries = fs::read_dir(&src).await?;
+            while let Some(entry) = entries.next().await {
                 let entry = entry?;
+                println!("pushing {:?}", entry);
                 let file_type = entry.file_type().await?;
                 stack.push((entry.path(), file_type.is_dir(), file_type.is_symlink()));
             }

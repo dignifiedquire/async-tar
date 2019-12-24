@@ -69,8 +69,9 @@ async fn simple_concat() {
         R: Read + Unpin + Sync + Send,
     {
         let mut names = Vec::new();
+        let mut entries = t!(ar.entries());
 
-        while let Some(entry) = t!(ar.entries()).next().await {
+        while let Some(entry) = entries.next().await {
             let e = t!(entry);
             names.push(t!(::std::str::from_utf8(&e.path_bytes())).to_string());
         }
@@ -84,7 +85,8 @@ async fn header_impls() {
     let mut ar = Archive::new(Cursor::new(tar!("simple.tar")));
     let hn = Header::new_old();
     let hnb = hn.as_bytes();
-    while let Some(file) = t!(ar.entries()).next().await {
+    let mut entries = t!(ar.entries());
+    while let Some(file) = entries.next().await {
         let file = t!(file);
         let h1 = file.header();
         let h1b = h1.as_bytes();
@@ -99,7 +101,9 @@ async fn header_impls_missing_last_header() {
     let mut ar = Archive::new(Cursor::new(tar!("simple_missing_last_header.tar")));
     let hn = Header::new_old();
     let hnb = hn.as_bytes();
-    while let Some(file) = t!(ar.entries()).next().await {
+    let mut entries = t!(ar.entries());
+
+    while let Some(file) = entries.next().await {
         let file = t!(file);
         let h1 = file.header();
         let h1b = h1.as_bytes();
@@ -367,10 +371,13 @@ async fn append_dir_all_blank_dest() {
         .write_all(b"file2")
         .await);
 
+    println!("build");
     let mut ar = Builder::new(Vec::new());
     t!(ar.append_dir_all("", base_dir).await);
+    println!("into inner");
     let data = t!(ar.into_inner().await);
 
+    println!("unpack");
     let mut ar = Archive::new(Cursor::new(data));
     t!(ar.unpack(td.path()).await);
     let base_dir = td.path();
@@ -829,17 +836,22 @@ async fn reading_sparse() {
     assert_eq!(&s[..5], "test\n");
     assert!(s[5..].chars().all(|x| x == '\u{0}'));
 
+    println!("-- entry 2");
     let mut a = t!(entries.next().await.unwrap());
     let mut s = String::new();
     assert_eq!(&*a.header().path_bytes(), b"sparse_end.txt");
+    println!("entry {:?}", &a);
     t!(a.read_to_string(&mut s).await);
     assert!(s[..s.len() - 9].chars().all(|x| x == '\u{0}'));
     assert_eq!(&s[s.len() - 9..], "test_end\n");
 
+    println!("-- entry 3");
     let mut a = t!(entries.next().await.unwrap());
     let mut s = String::new();
     assert_eq!(&*a.header().path_bytes(), b"sparse_ext.txt");
+    println!("entry: {:#?}", &a);
     t!(a.read_to_string(&mut s).await);
+    println!("read to string");
     assert!(s[..0x1000].chars().all(|x| x == '\u{0}'));
     assert_eq!(&s[0x1000..0x1000 + 5], "text\n");
     assert!(s[0x1000 + 5..0x3000].chars().all(|x| x == '\u{0}'));
@@ -853,6 +865,7 @@ async fn reading_sparse() {
     assert!(s[0x9000 + 5..0xb000].chars().all(|x| x == '\u{0}'));
     assert_eq!(&s[0xb000..0xb000 + 5], "text\n");
 
+    println!("-- entry 4");
     let mut a = t!(entries.next().await.unwrap());
     let mut s = String::new();
     assert_eq!(&*a.header().path_bytes(), b"sparse.txt");
@@ -863,6 +876,7 @@ async fn reading_sparse() {
     assert_eq!(&s[0x2fa0..0x2fa0 + 6], "world\n");
     assert!(s[0x2fa0 + 6..0x4000].chars().all(|x| x == '\u{0}'));
 
+    println!("-- entry 5 (none)");
     assert!(entries.next().await.is_none());
 }
 

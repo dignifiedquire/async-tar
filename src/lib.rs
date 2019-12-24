@@ -1,4 +1,4 @@
-//! A library for reading and writing TAR archives
+//! A library for reading and writing TAR archives in an async fashion.
 //!
 //! This library provides utilities necessary to manage [TAR archives][1]
 //! abstracted over a reader or writer. Great strides are taken to ensure that
@@ -17,9 +17,8 @@
 //     implementations are all found in this crate and the generic functions are
 //     all just super thin wrappers (e.g. easy to codegen).
 
-#![doc(html_root_url = "https://docs.rs/tar/0.4")]
 #![deny(missing_docs)]
-// #![cfg_attr(test, deny(warnings))]
+#![cfg_attr(test, deny(warnings))]
 
 use std::io::{Error, ErrorKind};
 

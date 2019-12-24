@@ -18,7 +18,8 @@ fn main() {
         let first_arg = args_os().skip(1).next().unwrap();
         let filename = Path::new(&first_arg);
         let mut ar = Archive::new(stdin());
-        while let Some(file) = ar.entries().unwrap().next().await {
+        let mut entries = ar.entries().unwrap();
+        while let Some(file) = entries.next().await {
             let mut f = file.unwrap();
             if f.path().unwrap() == filename {
                 copy(&mut f, &mut stdout()).await.unwrap();
