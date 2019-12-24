@@ -1,6 +1,7 @@
 use std::error;
 use std::fmt;
-use std::io::{self, Error};
+
+use async_std::io::{self, Error};
 
 #[derive(Debug)]
 pub struct TarError {

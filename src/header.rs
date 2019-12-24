@@ -5,13 +5,14 @@ use std::os::windows::prelude::*;
 
 use std::borrow::Cow;
 use std::fmt;
-use std::fs;
-use std::io;
 use std::iter;
 use std::iter::repeat;
 use std::mem;
-use std::path::{Component, Path, PathBuf};
 use std::str;
+
+use async_std::fs;
+use async_std::io;
+use async_std::path::{Component, Path, PathBuf};
 
 use crate::other;
 use crate::EntryType;
@@ -1598,7 +1599,7 @@ pub fn bytes2path(bytes: Cow<[u8]>) -> io::Result<Cow<Path>> {
 
 #[cfg(any(unix, target_os = "redox"))]
 /// On unix this operation can never fail.
-pub fn bytes2path(bytes: Cow<[u8]>) -> io::Result<Cow<Path>> {
+pub fn bytes2path(bytes: Cow<'_, [u8]>) -> io::Result<Cow<'_, Path>> {
     use std::ffi::{OsStr, OsString};
 
     Ok(match bytes {

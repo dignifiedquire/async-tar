@@ -23,7 +23,7 @@
 
 use std::io::{Error, ErrorKind};
 
-pub use crate::archive::{Archive, Entries};
+pub use crate::archive::{Archive, ArchiveBuilder, Entries};
 pub use crate::builder::Builder;
 pub use crate::entry::{Entry, Unpacked};
 pub use crate::entry_type::EntryType;
@@ -32,7 +32,6 @@ pub use crate::header::{GnuHeader, GnuSparseHeader, Header, HeaderMode, OldHeade
 pub use crate::pax::{PaxExtension, PaxExtensions};
 
 mod archive;
-pub mod async_tar;
 mod builder;
 mod entry;
 mod entry_type;

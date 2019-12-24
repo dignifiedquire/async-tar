@@ -163,7 +163,9 @@ fn set_ustar_path_hard() {
     let mut h = Header::new_ustar();
     let p = Path::new("a").join(&vec!["a"; 100].join(""));
     t!(h.set_path(&p));
-    assert_eq!(t!(h.path()), p);
+    let path = t!(h.path());
+    let actual: &Path = path.as_ref().into();
+    assert_eq!(actual, p);
 }
 
 #[test]

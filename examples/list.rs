@@ -4,14 +4,17 @@
 
 extern crate tar;
 
-use std::io::stdin;
+use async_std::io::stdin;
+use async_std::prelude::*;
 
 use tar::Archive;
 
 fn main() {
-    let mut ar = Archive::new(stdin());
-    for file in ar.entries().unwrap() {
-        let f = file.unwrap();
-        println!("{}", f.path().unwrap().display());
-    }
+    async_std::task::block_on(async {
+        let mut ar = Archive::new(stdin());
+        while let Some(file) = ar.entries().unwrap().next().await {
+            let f = file.unwrap();
+            println!("{}", f.path().unwrap().display());
+        }
+    });
 }

@@ -6,20 +6,23 @@
 
 extern crate tar;
 
+use async_std::io::{copy, stdin, stdout};
+use async_std::path::Path;
+use async_std::prelude::*;
 use std::env::args_os;
-use std::io::{copy, stdin, stdout};
-use std::path::Path;
 
 use tar::Archive;
 
 fn main() {
-    let first_arg = args_os().skip(1).next().unwrap();
-    let filename = Path::new(&first_arg);
-    let mut ar = Archive::new(stdin());
-    for file in ar.entries().unwrap() {
-        let mut f = file.unwrap();
-        if f.path().unwrap() == filename {
-            copy(&mut f, &mut stdout()).unwrap();
+    async_std::task::block_on(async {
+        let first_arg = args_os().skip(1).next().unwrap();
+        let filename = Path::new(&first_arg);
+        let mut ar = Archive::new(stdin());
+        while let Some(file) = ar.entries().unwrap().next().await {
+            let mut f = file.unwrap();
+            if f.path().unwrap() == filename {
+                copy(&mut f, &mut stdout()).await.unwrap();
+            }
         }
-    }
+    });
 }

@@ -1,13 +1,16 @@
 extern crate tar;
 
-use std::fs::File;
+use async_std::fs::File;
 use tar::Builder;
 
 fn main() {
-    let file = File::create("foo.tar").unwrap();
-    let mut a = Builder::new(file);
+    async_std::task::block_on(async {
+        let file = File::create("foo.tar").await.unwrap();
+        let mut a = Builder::new(file);
 
-    a.append_path("README.md").unwrap();
-    a.append_file("lib.rs", &mut File::open("src/lib.rs").unwrap())
-        .unwrap();
+        a.append_path("README.md").await.unwrap();
+        a.append_file("lib.rs", &mut File::open("src/lib.rs").await.unwrap())
+            .await
+            .unwrap();
+    });
 }

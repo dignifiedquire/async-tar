@@ -1,6 +1,7 @@
-use std::io;
 use std::slice;
 use std::str;
+
+use async_std::io;
 
 use crate::other;
 
