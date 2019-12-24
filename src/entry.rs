@@ -666,18 +666,18 @@ impl<R: Read + Unpin> EntryFields<R> {
             }
             Ok::<fs::File, io::Error>(f)
         }
-            .await
-            .map_err(|e| {
-                let header = self.header.path_bytes();
-                TarError::new(
-                    &format!(
-                        "failed to unpack `{}` into `{}`",
-                        String::from_utf8_lossy(&header),
-                        dst.display()
-                    ),
-                    e,
-                )
-            })?;
+        .await
+        .map_err(|e| {
+            let header = self.header.path_bytes();
+            TarError::new(
+                &format!(
+                    "failed to unpack `{}` into `{}`",
+                    String::from_utf8_lossy(&header),
+                    dst.display()
+                ),
+                e,
+            )
+        })?;
 
         if self.preserve_mtime {
             if let Ok(mtime) = self.header.mtime() {
