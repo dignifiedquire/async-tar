@@ -9,8 +9,9 @@ use async_std::prelude::*;
 use async_std::stream::Stream;
 use async_std::sync::Arc;
 use async_std::task::{Context, Poll};
-use pin_cell::PinCell;
 use pin_project::pin_project;
+
+use crate::pin_cell::PinCell;
 
 use crate::entry::{EntryFields, EntryIo};
 use crate::error::TarError;
@@ -545,7 +546,8 @@ impl<R: Read + Unpin> Read for Archive<R> {
     ) -> Poll<io::Result<usize>> {
         let mut r = Pin::new(&Pin::new(&mut &*self.inner).obj).borrow_mut();
 
-        let res = async_std::task::ready!(pin_cell::PinMut::as_mut(&mut r).poll_read(cx, into));
+        let res =
+            async_std::task::ready!(crate::pin_cell::PinMut::as_mut(&mut r).poll_read(cx, into));
         match res {
             Ok(i) => {
                 self.inner.pos.set(self.inner.pos.get() + i as u64);

@@ -18,7 +18,6 @@
 //     all just super thin wrappers (e.g. easy to codegen).
 
 #![deny(missing_docs)]
-#![cfg_attr(test, deny(warnings))]
 
 use std::io::{Error, ErrorKind};
 
@@ -37,6 +36,7 @@ mod entry_type;
 mod error;
 mod header;
 mod pax;
+mod pin_cell;
 
 fn other(msg: &str) -> Error {
     Error::new(ErrorKind::Other, msg)
