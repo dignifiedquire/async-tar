@@ -6,6 +6,7 @@
 
 /// A non-exhaustive enum representing the possible entry types
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum EntryType {
     /// Regular file
     Regular,
@@ -33,13 +34,8 @@ pub enum EntryType {
     XGlobalHeader,
     /// Extended Header
     XHeader,
-    /// Hints that destructuring should not be exhaustive.
-    ///
-    /// This enum may grow additional variants, so this makes sure clients
-    /// don't count on exhaustive matching. (Otherwise, adding a new variant
-    /// could break existing code.)
-    #[doc(hidden)]
-    __Nonexhaustive(u8),
+    /// Unknown header,
+    Other(u8),
 }
 
 impl EntryType {
@@ -62,13 +58,13 @@ impl EntryType {
             b'L' => EntryType::GNULongName,
             b'K' => EntryType::GNULongLink,
             b'S' => EntryType::GNUSparse,
-            b => EntryType::__Nonexhaustive(b),
+            other => EntryType::Other(other),
         }
     }
 
     /// Returns the raw underlying byte that this entry type represents.
-    pub fn as_byte(&self) -> u8 {
-        match *self {
+    pub fn as_byte(self) -> u8 {
+        match self {
             EntryType::Regular => b'0',
             EntryType::Link => b'1',
             EntryType::Symlink => b'2',
@@ -82,7 +78,7 @@ impl EntryType {
             EntryType::GNULongName => b'L',
             EntryType::GNULongLink => b'K',
             EntryType::GNUSparse => b'S',
-            EntryType::__Nonexhaustive(b) => b,
+            EntryType::Other(other) => other,
         }
     }
 
@@ -127,67 +123,67 @@ impl EntryType {
     }
 
     /// Returns whether this type represents a regular file.
-    pub fn is_file(&self) -> bool {
-        self == &EntryType::Regular
+    pub fn is_file(self) -> bool {
+        self == EntryType::Regular
     }
 
     /// Returns whether this type represents a hard link.
-    pub fn is_hard_link(&self) -> bool {
-        self == &EntryType::Link
+    pub fn is_hard_link(self) -> bool {
+        self == EntryType::Link
     }
 
     /// Returns whether this type represents a symlink.
-    pub fn is_symlink(&self) -> bool {
-        self == &EntryType::Symlink
+    pub fn is_symlink(self) -> bool {
+        self == EntryType::Symlink
     }
 
     /// Returns whether this type represents a character special device.
-    pub fn is_character_special(&self) -> bool {
-        self == &EntryType::Char
+    pub fn is_character_special(self) -> bool {
+        self == EntryType::Char
     }
 
     /// Returns whether this type represents a block special device.
-    pub fn is_block_special(&self) -> bool {
-        self == &EntryType::Block
+    pub fn is_block_special(self) -> bool {
+        self == EntryType::Block
     }
 
     /// Returns whether this type represents a directory.
-    pub fn is_dir(&self) -> bool {
-        self == &EntryType::Directory
+    pub fn is_dir(self) -> bool {
+        self == EntryType::Directory
     }
 
     /// Returns whether this type represents a FIFO.
-    pub fn is_fifo(&self) -> bool {
-        self == &EntryType::Fifo
+    pub fn is_fifo(self) -> bool {
+        self == EntryType::Fifo
     }
 
     /// Returns whether this type represents a contiguous file.
-    pub fn is_contiguous(&self) -> bool {
-        self == &EntryType::Continuous
+    pub fn is_contiguous(self) -> bool {
+        self == EntryType::Continuous
     }
 
     /// Returns whether this type represents a GNU long name header.
-    pub fn is_gnu_longname(&self) -> bool {
-        self == &EntryType::GNULongName
+    pub fn is_gnu_longname(self) -> bool {
+        self == EntryType::GNULongName
     }
 
     /// Returns whether this type represents a GNU sparse header.
-    pub fn is_gnu_sparse(&self) -> bool {
-        self == &EntryType::GNUSparse
+    pub fn is_gnu_sparse(self) -> bool {
+        self == EntryType::GNUSparse
     }
 
     /// Returns whether this type represents a GNU long link header.
-    pub fn is_gnu_longlink(&self) -> bool {
-        self == &EntryType::GNULongLink
+    pub fn is_gnu_longlink(self) -> bool {
+        self == EntryType::GNULongLink
     }
 
     /// Returns whether this type represents a GNU long name header.
-    pub fn is_pax_global_extensions(&self) -> bool {
-        self == &EntryType::XGlobalHeader
+    pub fn is_pax_global_extensions(self) -> bool {
+        self == EntryType::XGlobalHeader
     }
 
     /// Returns whether this type represents a GNU long link header.
-    pub fn is_pax_local_extensions(&self) -> bool {
-        self == &EntryType::XHeader
+    pub fn is_pax_local_extensions(self) -> bool {
+        self == EntryType::XHeader
     }
 }

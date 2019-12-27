@@ -6,16 +6,18 @@
 
 extern crate async_tar;
 
-use async_std::io::{copy, stdin, stdout};
-use async_std::path::Path;
-use async_std::prelude::*;
+use async_std::{
+    io::{copy, stdin, stdout},
+    path::Path,
+    prelude::*,
+};
 use std::env::args_os;
 
 use async_tar::Archive;
 
 fn main() {
     async_std::task::block_on(async {
-        let first_arg = args_os().skip(1).next().unwrap();
+        let first_arg = args_os().nth(1).unwrap();
         let filename = Path::new(&first_arg);
         let mut ar = Archive::new(stdin());
         let mut entries = ar.entries().unwrap();

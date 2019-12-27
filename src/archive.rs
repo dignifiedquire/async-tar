@@ -1,22 +1,27 @@
-use std::cell::{Cell, RefCell};
-use std::cmp;
-use std::pin::Pin;
+use std::{
+    cell::{Cell, RefCell},
+    cmp,
+    pin::Pin,
+};
 
-use async_std::io;
-use async_std::io::prelude::*;
-use async_std::path::Path;
-use async_std::prelude::*;
-use async_std::stream::Stream;
-use async_std::sync::Arc;
-use async_std::task::{Context, Poll};
+use async_std::{
+    io,
+    io::prelude::*,
+    path::Path,
+    prelude::*,
+    stream::Stream,
+    sync::Arc,
+    task::{Context, Poll},
+};
 use pin_project::pin_project;
 
 use crate::pin_cell::PinCell;
 
-use crate::entry::{EntryFields, EntryIo};
-use crate::error::TarError;
-use crate::other;
-use crate::{Entry, GnuExtSparseHeader, GnuSparseHeader, Header};
+use crate::{
+    entry::{EntryFields, EntryIo},
+    error::TarError,
+    other, Entry, GnuExtSparseHeader, GnuSparseHeader, Header,
+};
 
 /// A top-level representation of an archive file.
 ///
@@ -400,11 +405,11 @@ fn poll_next_raw<R: Read + Unpin>(
     let data = EntryIo::Data(archive.clone().take(size));
 
     let ret = EntryFields {
-        size: size,
-        header_pos: header_pos,
-        file_pos: file_pos,
+        size,
+        header_pos,
+        file_pos,
         data: vec![data],
-        header: header,
+        header,
         long_pathname: None,
         long_linkname: None,
         pax_extensions: None,

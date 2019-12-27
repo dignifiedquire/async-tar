@@ -1,8 +1,7 @@
 extern crate async_tar;
 extern crate tempfile;
 
-use async_std::fs::File;
-use async_std::prelude::*;
+use async_std::{fs::File, prelude::*};
 
 use tempfile::Builder;
 

@@ -3,19 +3,14 @@ use std::os::unix::prelude::*;
 #[cfg(windows)]
 use std::os::windows::prelude::*;
 
-use std::borrow::Cow;
-use std::fmt;
-use std::iter;
-use std::iter::repeat;
-use std::mem;
-use std::str;
+use std::{borrow::Cow, fmt, iter, iter::repeat, mem, str};
 
-use async_std::fs;
-use async_std::io;
-use async_std::path::{Component, Path, PathBuf};
+use async_std::{
+    fs, io,
+    path::{Component, Path, PathBuf},
+};
 
-use crate::other;
-use crate::EntryType;
+use crate::{other, EntryType};
 
 /// Representation of the header of an entry in an archive
 #[repr(C)]
@@ -27,6 +22,7 @@ pub struct Header {
 /// Declares the information that should be included when filling a Header
 /// from filesystem metadata.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum HeaderMode {
     /// All supported metadata, including mod/access times and ownership will
     /// be included.
@@ -35,9 +31,6 @@ pub enum HeaderMode {
     /// Only metadata that is directly relevant to the identity of a file will
     /// be included. In particular, ownership and mod/access times are excluded.
     Deterministic,
-
-    #[doc(hidden)]
-    __Nonexhaustive,
 }
 
 /// Representation of the header of an entry in an archive
@@ -609,10 +602,11 @@ impl Header {
     /// major device number.
     pub fn set_device_major(&mut self, major: u32) -> io::Result<()> {
         if let Some(ustar) = self.as_ustar_mut() {
-            return Ok(ustar.set_device_major(major));
-        }
-        if let Some(gnu) = self.as_gnu_mut() {
-            Ok(gnu.set_device_major(major))
+            ustar.set_device_major(major);
+            Ok(())
+        } else if let Some(gnu) = self.as_gnu_mut() {
+            gnu.set_device_major(major);
+            Ok(())
         } else {
             Err(other("not a ustar or gnu archive, cannot set dev_major"))
         }
@@ -641,10 +635,11 @@ impl Header {
     /// minor device number.
     pub fn set_device_minor(&mut self, minor: u32) -> io::Result<()> {
         if let Some(ustar) = self.as_ustar_mut() {
-            return Ok(ustar.set_device_minor(minor));
-        }
-        if let Some(gnu) = self.as_gnu_mut() {
-            Ok(gnu.set_device_minor(minor))
+            ustar.set_device_minor(minor);
+            Ok(())
+        } else if let Some(gnu) = self.as_gnu_mut() {
+            gnu.set_device_minor(minor);
+            Ok(())
         } else {
             Err(other("not a ustar or gnu archive, cannot set dev_minor"))
         }
@@ -740,7 +735,6 @@ impl Header {
                 };
                 self.set_mode(fs_mode);
             }
-            HeaderMode::__Nonexhaustive => panic!(),
         }
 
         // Note that if we are a GNU header we *could* set atime/ctime, except
@@ -812,7 +806,6 @@ impl Header {
                 let fs_mode = if meta.is_dir() { 0o755 } else { 0o644 };
                 self.set_mode(fs_mode);
             }
-            HeaderMode::__Nonexhaustive => panic!(),
         }
 
         let ft = meta.file_type();
@@ -937,7 +930,7 @@ impl UstarHeader {
         } else {
             let mut bytes = Vec::new();
             let prefix = truncate(&self.prefix);
-            if prefix.len() > 0 {
+            if !prefix.is_empty() {
                 bytes.extend_from_slice(prefix);
                 bytes.push(b'/');
             }
@@ -1346,13 +1339,13 @@ impl GnuExtSparseHeader {
     /// Returns a view into this header as a byte array.
     pub fn as_bytes(&self) -> &[u8; 512] {
         debug_assert_eq!(mem::size_of_val(self), 512);
-        unsafe { mem::transmute(self) }
+        unsafe { &*(self as *const GnuExtSparseHeader as *const [u8; 512]) }
     }
 
     /// Returns a view into this header as a byte array.
     pub fn as_mut_bytes(&mut self) -> &mut [u8; 512] {
         debug_assert_eq!(mem::size_of_val(self), 512);
-        unsafe { mem::transmute(self) }
+        unsafe { &mut *(self as *mut GnuExtSparseHeader as *mut [u8; 512]) }
     }
 
     /// Returns a slice of the underlying sparse headers.
@@ -1403,7 +1396,7 @@ fn octal_into<T: fmt::Octal>(dst: &mut [u8], val: T) {
 // Wrapper to figure out if we should fill the header field using tar's numeric
 // extension (binary) or not (octal).
 fn num_field_wrapper_into(dst: &mut [u8], src: u64) {
-    if src >= 8589934592 || (src >= 2097152 && dst.len() == 8) {
+    if src >= 8_589_934_592 || (src >= 2_097_152 && dst.len() == 8) {
         numeric_extended_into(dst, src);
     } else {
         octal_into(dst, src);
