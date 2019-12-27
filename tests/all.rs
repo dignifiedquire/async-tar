@@ -4,10 +4,12 @@ extern crate tempfile;
 #[cfg(all(unix, feature = "xattr"))]
 extern crate xattr;
 
-use async_std::fs::{self, File};
-use async_std::io::{self, Cursor, Read, Write};
-use async_std::path::{Path, PathBuf};
-use async_std::prelude::*;
+use async_std::{
+    fs::{self, File},
+    io::{self, Cursor, Read, Write},
+    path::{Path, PathBuf},
+    prelude::*,
+};
 use std::iter::repeat;
 
 use async_tar::{Archive, ArchiveBuilder, Builder, EntryType, Header};
@@ -275,7 +277,7 @@ async fn xattrs() {
     t!(ar.unpack(td.path()).await);
 
     let val = xattr::get(td.path().join("a/b"), "user.pax.flags").unwrap();
-    assert_eq!(val.unwrap(), "epm".as_bytes());
+    assert_eq!(val.unwrap(), b"epm");
 }
 
 #[async_std::test]
@@ -591,7 +593,7 @@ async fn octal_spaces() {
     assert_eq!(entry.header().uid().unwrap(), 0);
     assert_eq!(entry.header().gid().unwrap(), 0);
     assert_eq!(entry.header().size().unwrap(), 2);
-    assert_eq!(entry.header().mtime().unwrap(), 0o12440016664);
+    assert_eq!(entry.header().mtime().unwrap(), 0o12_440_016_664);
     assert_eq!(entry.header().cksum().unwrap(), 0o4253);
 }
 
@@ -640,9 +642,9 @@ async fn file_times() {
     let meta = fs::metadata(td.path().join("a")).await.unwrap();
     let mtime = FileTime::from_last_modification_time(&meta);
     let atime = FileTime::from_last_access_time(&meta);
-    assert_eq!(mtime.unix_seconds(), 1000000000);
+    assert_eq!(mtime.unix_seconds(), 1_000_000_000);
     assert_eq!(mtime.nanoseconds(), 0);
-    assert_eq!(atime.unix_seconds(), 1000000000);
+    assert_eq!(atime.unix_seconds(), 1_000_000_000);
     assert_eq!(atime.nanoseconds(), 0);
 }
 
@@ -683,8 +685,7 @@ async fn backslash_treated_well() {
 #[cfg(unix)]
 #[async_std::test]
 async fn nul_bytes_in_path() {
-    use std::ffi::OsStr;
-    use std::os::unix::prelude::*;
+    use std::{ffi::OsStr, os::unix::prelude::*};
 
     let nul_path = OsStr::from_bytes(b"foo\0");
     let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
@@ -767,7 +768,7 @@ async fn long_name_trailing_nul() {
     h.set_size(6);
     h.set_entry_type(EntryType::file());
     h.set_cksum();
-    t!(b.append(&h, "foobar".as_bytes()).await);
+    t!(b.append(&h, b"foobar" as &[u8]).await);
 
     let contents = t!(b.into_inner().await);
     let mut a = Archive::new(&contents[..]);
@@ -792,7 +793,7 @@ async fn long_linkname_trailing_nul() {
     h.set_size(6);
     h.set_entry_type(EntryType::file());
     h.set_cksum();
-    t!(b.append(&h, "foobar".as_bytes()).await);
+    t!(b.append(&h, b"foobar" as &[u8]).await);
 
     let contents = t!(b.into_inner().await);
     let mut a = Archive::new(&contents[..]);
@@ -972,9 +973,7 @@ async fn path_separators() {
 #[async_std::test]
 #[cfg(unix)]
 async fn append_path_symlink() {
-    use std::borrow::Cow;
-    use std::env;
-    use std::os::unix::fs::symlink;
+    use std::{borrow::Cow, env, os::unix::fs::symlink};
 
     let mut ar = Builder::new(Vec::new());
     ar.follow_symlinks(false);

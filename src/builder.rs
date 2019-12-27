@@ -1,12 +1,16 @@
 use std::borrow::Cow;
 
-use async_std::fs;
-use async_std::io::{self, Read, Write};
-use async_std::path::Path;
-use async_std::prelude::*;
+use async_std::{
+    fs,
+    io::{self, Read, Write},
+    path::Path,
+    prelude::*,
+};
 
-use crate::header::{bytes2path, path2bytes, HeaderMode};
-use crate::{other, EntryType, Header};
+use crate::{
+    header::{bytes2path, path2bytes, HeaderMode},
+    other, EntryType, Header,
+};
 
 /// A structure for building archives
 ///
@@ -208,7 +212,7 @@ impl<W: Write + Unpin> Builder<W> {
     /// # Ok(()) }) }
     /// ```
     pub async fn append_path<P: AsRef<Path>>(&mut self, path: P) -> io::Result<()> {
-        let mode = self.mode.clone();
+        let mode = self.mode;
         let follow = self.follow;
         append_path_with_name(self.get_mut(), path.as_ref(), None, mode, follow).await?;
         Ok(())
@@ -248,7 +252,7 @@ impl<W: Write + Unpin> Builder<W> {
         path: P,
         name: N,
     ) -> io::Result<()> {
-        let mode = self.mode.clone();
+        let mode = self.mode;
         let follow = self.follow;
         append_path_with_name(
             self.get_mut(),
@@ -296,7 +300,7 @@ impl<W: Write + Unpin> Builder<W> {
         path: P,
         file: &mut fs::File,
     ) -> io::Result<()> {
-        let mode = self.mode.clone();
+        let mode = self.mode;
         append_file(self.get_mut(), path.as_ref(), file, mode).await?;
         Ok(())
     }
@@ -335,7 +339,7 @@ impl<W: Write + Unpin> Builder<W> {
         P: AsRef<Path>,
         Q: AsRef<Path>,
     {
-        let mode = self.mode.clone();
+        let mode = self.mode;
         append_dir(self.get_mut(), path.as_ref(), src_path.as_ref(), mode).await?;
         Ok(())
     }
@@ -371,7 +375,7 @@ impl<W: Write + Unpin> Builder<W> {
         P: AsRef<Path>,
         Q: AsRef<Path>,
     {
-        let mode = self.mode.clone();
+        let mode = self.mode;
         let follow = self.follow;
         append_dir_all(
             self.get_mut(),
@@ -495,7 +499,7 @@ async fn append_dir(
     Ok(())
 }
 
-fn prepare_header(size: u64, entry_type: u8) -> Header {
+fn prepare_header(size: u64, entry_type: EntryType) -> Header {
     let mut header = Header::new_gnu();
     let name = b"././@LongLink";
     header.as_gnu_mut().unwrap().name[..name.len()].clone_from_slice(&name[..]);
@@ -505,7 +509,7 @@ fn prepare_header(size: u64, entry_type: u8) -> Header {
     header.set_mtime(0);
     // + 1 to be compliant with GNU tar
     header.set_size(size + 1);
-    header.set_entry_type(EntryType::new(entry_type));
+    header.set_entry_type(entry_type);
     header.set_cksum();
     header
 }
@@ -527,7 +531,7 @@ async fn prepare_header_path(
         if data.len() < max {
             return Err(e);
         }
-        let header2 = prepare_header(data.len() as u64, b'L');
+        let header2 = prepare_header(data.len() as u64, EntryType::GNULongName);
         // null-terminated string
         let mut data2 = data.chain(io::repeat(0).take(1));
         append(dst, &header2, &mut data2).await?;
@@ -550,7 +554,7 @@ async fn prepare_header_link(
         if data.len() < header.as_old().linkname.len() {
             return Err(e);
         }
-        let header2 = prepare_header(data.len() as u64, b'K');
+        let header2 = prepare_header(data.len() as u64, EntryType::GNULongLink);
         let mut data2 = data.chain(io::repeat(0).take(1));
         append(dst, &header2, &mut data2).await?;
     }

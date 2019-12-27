@@ -1,22 +1,23 @@
-use std::borrow::Cow;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::{cmp, fmt, marker};
+use std::{
+    borrow::Cow,
+    cmp, fmt, marker,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
-use async_std::fs;
-use async_std::fs::OpenOptions;
-use async_std::io::prelude::*;
-use async_std::io::{self, Error, ErrorKind, SeekFrom};
-use async_std::path::{Component, Path, PathBuf};
+use async_std::{
+    fs,
+    fs::OpenOptions,
+    io::{self, prelude::*, Error, ErrorKind, SeekFrom},
+    path::{Component, Path, PathBuf},
+};
 use pin_project::{pin_project, project};
 
 use filetime::{self, FileTime};
 
-use crate::error::TarError;
-use crate::header::bytes2path;
-use crate::other;
-use crate::pax::pax_extensions;
-use crate::{Archive, Header, PaxExtensions};
+use crate::{
+    error::TarError, header::bytes2path, other, pax::pax_extensions, Archive, Header, PaxExtensions,
+};
 
 /// A read-only view into an entry of an archive.
 ///
@@ -96,12 +97,12 @@ impl<R: Read + Unpin> fmt::Debug for EntryIo<R> {
 /// additional handling by users. Today the File is returned, in future
 /// the enum may be extended with kinds for links, directories etc.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Unpacked {
     /// A file was unpacked.
     File(fs::File),
     /// A directory, hardlink, symlink, or other node was unpacked.
-    #[doc(hidden)]
-    __Nonexhaustive,
+    Other,
 }
 
 impl<R: Read + Unpin> Entry<R> {
@@ -516,7 +517,7 @@ impl<R: Read + Unpin> EntryFields<R> {
             if let Ok(mode) = self.header.mode() {
                 set_perms(dst, None, mode, self.preserve_permissions).await?;
             }
-            return Ok(Unpacked::__Nonexhaustive);
+            return Ok(Unpacked::Other);
         } else if kind.is_hard_link() || kind.is_symlink() {
             let src = match self.link_name()? {
                 Some(name) => name,
@@ -579,7 +580,7 @@ impl<R: Read + Unpin> EntryFields<R> {
                     )
                 })?;
             };
-            return Ok(Unpacked::__Nonexhaustive);
+            return Ok(Unpacked::Other);
 
             #[cfg(target_arch = "wasm32")]
             #[allow(unused_variables)]
@@ -601,7 +602,7 @@ impl<R: Read + Unpin> EntryFields<R> {
             || kind.is_gnu_longname()
             || kind.is_gnu_longlink()
         {
-            return Ok(Unpacked::__Nonexhaustive);
+            return Ok(Unpacked::Other);
         };
 
         // Old BSD-tar compatibility.
@@ -612,7 +613,7 @@ impl<R: Read + Unpin> EntryFields<R> {
             if let Ok(mode) = self.header.mode() {
                 set_perms(dst, None, mode, self.preserve_permissions).await?;
             }
-            return Ok(Unpacked::__Nonexhaustive);
+            return Ok(Unpacked::Other);
         }
 
         // Note the lack of `else` clause above. According to the FreeBSD
@@ -666,18 +667,18 @@ impl<R: Read + Unpin> EntryFields<R> {
             }
             Ok::<fs::File, io::Error>(f)
         }
-            .await
-            .map_err(|e| {
-                let header = self.header.path_bytes();
-                TarError::new(
-                    &format!(
-                        "failed to unpack `{}` into `{}`",
-                        String::from_utf8_lossy(&header),
-                        dst.display()
-                    ),
-                    e,
-                )
-            })?;
+        .await
+        .map_err(|e| {
+            let header = self.header.path_bytes();
+            TarError::new(
+                &format!(
+                    "failed to unpack `{}` into `{}`",
+                    String::from_utf8_lossy(&header),
+                    dst.display()
+                ),
+                e,
+            )
+        })?;
 
         if self.preserve_mtime {
             if let Ok(mtime) = self.header.mtime() {
@@ -771,8 +772,7 @@ impl<R: Read + Unpin> EntryFields<R> {
             me: &mut EntryFields<R>,
             dst: &Path,
         ) -> io::Result<()> {
-            use std::ffi::OsStr;
-            use std::os::unix::prelude::*;
+            use std::{ffi::OsStr, os::unix::prelude::*};
 
             let exts = match me.pax_extensions().await {
                 Ok(Some(e)) => e,

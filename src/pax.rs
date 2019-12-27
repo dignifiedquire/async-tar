@@ -1,5 +1,4 @@
-use std::slice;
-use std::str;
+use std::{slice, str};
 
 use async_std::io;
 
@@ -20,11 +19,8 @@ pub struct PaxExtension<'entry> {
 }
 
 pub fn pax_extensions(a: &[u8]) -> PaxExtensions {
-    fn is_newline(a: &u8) -> bool {
-        *a == b'\n'
-    }
     PaxExtensions {
-        data: a.split(is_newline),
+        data: a.split(|a| *a == b'\n'),
     }
 }
 

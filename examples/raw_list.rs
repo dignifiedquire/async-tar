@@ -4,8 +4,7 @@
 
 extern crate async_tar;
 
-use async_std::io::stdin;
-use async_std::prelude::*;
+use async_std::{io::stdin, prelude::*};
 
 use async_tar::Archive;
 
