@@ -11,7 +11,7 @@ use async_std::{
     io::{self, prelude::*, Error, ErrorKind, SeekFrom},
     path::{Component, Path, PathBuf},
 };
-use pin_project::{pin_project, project};
+use pin_project::pin_project;
 
 use filetime::{self, FileTime};
 
@@ -78,7 +78,7 @@ impl<R: Read + Unpin> fmt::Debug for EntryFields<R> {
     }
 }
 
-#[pin_project]
+#[pin_project(project = EntryIoProject)]
 pub enum EntryIo<R: Read + Unpin> {
     Pad(#[pin] io::Take<io::Repeat>),
     Data(#[pin] io::Take<R>),
@@ -897,16 +897,14 @@ impl<R: Read + Unpin> Read for EntryFields<R> {
 }
 
 impl<R: Read + Unpin> Read for EntryIo<R> {
-    #[project]
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         into: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        #[project]
         match self.project() {
-            EntryIo::Pad(io) => io.poll_read(cx, into),
-            EntryIo::Data(io) => io.poll_read(cx, into),
+            EntryIoProject::Pad(io) => io.poll_read(cx, into),
+            EntryIoProject::Data(io) => io.poll_read(cx, into),
         }
     }
 }
