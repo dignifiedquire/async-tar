@@ -1097,3 +1097,11 @@ async fn tar_directory_containing_symlink_to_directory() {
     ar.append_dir_all("symlinks", td.path()).await.unwrap();
     ar.finish().await.unwrap();
 }
+
+#[async_std::test]
+async fn long_path() {
+    let td = t!(TempBuilder::new().prefix("tar-rs").tempdir());
+    let rdr = Cursor::new(tar!("7z_long_path.tar"));
+    let mut ar = Archive::new(rdr);
+    ar.unpack(td.path()).await.unwrap();
+}
