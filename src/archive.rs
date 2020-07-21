@@ -135,7 +135,7 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
     }
 }
 
-impl<R: Read + Unpin + Sync + Send> Archive<R> {
+impl<R: Read + Unpin> Archive<R> {
     /// Create a new archive with the underlying object as the reader.
     pub fn new(obj: R) -> Archive<R> {
         Archive {
