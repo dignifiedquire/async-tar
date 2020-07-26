@@ -10,7 +10,7 @@ use async_tar::Archive;
 
 fn main() {
     async_std::task::block_on(async {
-        let mut ar = Archive::new(stdin());
+        let ar = Archive::new(stdin());
         let mut entries = ar.entries().unwrap();
         while let Some(file) = entries.next().await {
             let f = file.unwrap();

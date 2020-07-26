@@ -1,7 +1,7 @@
 use std::{
-    cell::{Cell, RefCell},
     cmp,
     pin::Pin,
+    sync::{Arc, Mutex},
 };
 
 use async_std::{
@@ -10,12 +10,9 @@ use async_std::{
     path::Path,
     prelude::*,
     stream::Stream,
-    sync::Arc,
     task::{Context, Poll},
 };
 use pin_project::pin_project;
-
-use crate::pin_cell::PinCell;
 
 use crate::{
     entry::{EntryFields, EntryIo},
@@ -28,7 +25,7 @@ use crate::{
 /// This archive can have an entry added to it and it can be iterated over.
 #[derive(Debug)]
 pub struct Archive<R: Read + Unpin> {
-    inner: Arc<ArchiveInner<R>>,
+    inner: Arc<Mutex<ArchiveInner<R>>>,
 }
 
 impl<R: Read + Unpin> Clone for Archive<R> {
@@ -41,19 +38,19 @@ impl<R: Read + Unpin> Clone for Archive<R> {
 
 #[pin_project]
 #[derive(Debug)]
-pub struct ArchiveInner<R> {
-    pos: Cell<u64>,
+pub struct ArchiveInner<R: Read + Unpin> {
+    pos: u64,
     unpack_xattrs: bool,
     preserve_permissions: bool,
     preserve_mtime: bool,
     ignore_zeros: bool,
     #[pin]
-    obj: PinCell<R>,
+    obj: R,
 }
 
 /// Configure the archive.
 pub struct ArchiveBuilder<R: Read + Unpin> {
-    obj: PinCell<R>,
+    obj: R,
     unpack_xattrs: bool,
     preserve_permissions: bool,
     preserve_mtime: bool,
@@ -68,7 +65,7 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
             preserve_permissions: false,
             preserve_mtime: true,
             ignore_zeros: false,
-            obj: PinCell::new(obj),
+            obj,
         }
     }
 
@@ -123,14 +120,14 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
         } = self;
 
         Archive {
-            inner: Arc::new(ArchiveInner {
+            inner: Arc::new(Mutex::new(ArchiveInner {
                 unpack_xattrs,
                 preserve_permissions,
                 preserve_mtime,
                 ignore_zeros,
                 obj,
-                pos: Cell::new(0),
-            }),
+                pos: 0,
+            })),
         }
     }
 }
@@ -139,26 +136,21 @@ impl<R: Read + Unpin> Archive<R> {
     /// Create a new archive with the underlying object as the reader.
     pub fn new(obj: R) -> Archive<R> {
         Archive {
-            inner: Arc::new(ArchiveInner {
+            inner: Arc::new(Mutex::new(ArchiveInner {
                 unpack_xattrs: false,
                 preserve_permissions: false,
                 preserve_mtime: true,
                 ignore_zeros: false,
-                obj: PinCell::new(obj),
-                pos: Cell::new(0),
-            }),
+                obj: obj,
+                pos: 0,
+            })),
         }
     }
 
     /// Unwrap this archive, returning the underlying object.
     pub fn into_inner(self) -> Result<R, Self> {
-        let Self { inner } = self;
-
-        match Arc::try_unwrap(inner) {
-            Ok(inner) => {
-                let c: RefCell<R> = inner.obj.into();
-                Ok(c.into_inner())
-            }
+        match Arc::try_unwrap(self.inner) {
+            Ok(inner) => Ok(inner.into_inner().unwrap().obj),
             Err(inner) => Err(Self { inner }),
         }
     }
@@ -169,8 +161,8 @@ impl<R: Read + Unpin> Archive<R> {
     /// sequence. If entries are processed out of sequence (from what the
     /// stream returns), then the contents read for each entry may be
     /// corrupted.
-    pub fn entries(&mut self) -> io::Result<Entries<R>> {
-        if self.inner.pos.get() != 0 {
+    pub fn entries(self) -> io::Result<Entries<R>> {
+        if self.inner.lock().unwrap().pos != 0 {
             return Err(other(
                 "cannot call entries unless archive is at \
                  position 0",
@@ -178,7 +170,7 @@ impl<R: Read + Unpin> Archive<R> {
         }
 
         Ok(Entries {
-            archive: self.clone(),
+            archive: self,
             current: (0, None, 0, None),
             gnu_longlink: None,
             gnu_longname: None,
@@ -192,8 +184,8 @@ impl<R: Read + Unpin> Archive<R> {
     /// sequence. If entries are processed out of sequence (from what the
     /// stream returns), then the contents read for each entry may be
     /// corrupted.
-    pub fn entries_raw(&mut self) -> io::Result<RawEntries<R>> {
-        if self.inner.pos.get() != 0 {
+    pub fn entries_raw(self) -> io::Result<RawEntries<R>> {
+        if self.inner.lock().unwrap().pos != 0 {
             return Err(other(
                 "cannot call entries_raw unless archive is at \
                  position 0",
@@ -201,7 +193,7 @@ impl<R: Read + Unpin> Archive<R> {
         }
 
         Ok(RawEntries {
-            archive: self.clone(),
+            archive: self,
             current: (0, None, 0),
         })
     }
@@ -229,7 +221,7 @@ impl<R: Read + Unpin> Archive<R> {
     /// #
     /// # Ok(()) }) }
     /// ```
-    pub async fn unpack<P: AsRef<Path>>(&mut self, dst: P) -> io::Result<()> {
+    pub async fn unpack<P: AsRef<Path>>(self, dst: P) -> io::Result<()> {
         let mut entries = self.entries()?;
         let mut pinned = Pin::new(&mut entries);
         while let Some(entry) = pinned.next().await {
@@ -332,7 +324,6 @@ impl<R: Read + Unpin> Stream for Entries<R> {
 
             let archive = self.archive.clone();
             let (next, _, current_pos, current_ext) = &mut self.current;
-
             ready_err!(poll_parse_sparse_header(
                 archive,
                 next,
@@ -364,7 +355,7 @@ impl<R: Read + Unpin> Stream for RawEntries<R> {
 }
 
 fn poll_next_raw<R: Read + Unpin>(
-    mut archive: Archive<R>,
+    archive: Archive<R>,
     next: &mut u64,
     current_header: &mut Option<Header>,
     current_header_pos: &mut usize,
@@ -373,10 +364,11 @@ fn poll_next_raw<R: Read + Unpin>(
     let mut header_pos = *next;
 
     loop {
+        let archive = archive.clone();
         // Seek to the start of the next header in the archive
         if current_header.is_none() {
-            let delta = *next - archive.inner.pos.get();
-            match async_std::task::ready!(poll_skip(&mut archive, cx, delta)) {
+            let delta = *next - archive.inner.lock().unwrap().pos;
+            match async_std::task::ready!(poll_skip(archive.clone(), cx, delta)) {
                 Ok(_) => {}
                 Err(err) => return Poll::Ready(Some(Err(err))),
             }
@@ -389,7 +381,7 @@ fn poll_next_raw<R: Read + Unpin>(
 
         // EOF is an indicator that we are at the end of the archive.
         match async_std::task::ready!(poll_try_read_all(
-            &mut archive,
+            archive.clone(),
             cx,
             header.as_mut_bytes(),
             current_header_pos,
@@ -407,7 +399,7 @@ fn poll_next_raw<R: Read + Unpin>(
             break;
         }
 
-        if !archive.inner.ignore_zeros {
+        if !archive.inner.lock().unwrap().ignore_zeros {
             return Poll::Ready(None);
         }
 
@@ -436,6 +428,13 @@ fn poll_next_raw<R: Read + Unpin>(
 
     let header = current_header.take().unwrap();
 
+    let ArchiveInner {
+        unpack_xattrs,
+        preserve_mtime,
+        preserve_permissions,
+        ..
+    } = &*archive.inner.lock().unwrap();
+
     let ret = EntryFields {
         size,
         header_pos,
@@ -445,9 +444,9 @@ fn poll_next_raw<R: Read + Unpin>(
         long_pathname: None,
         long_linkname: None,
         pax_extensions: None,
-        unpack_xattrs: archive.inner.unpack_xattrs,
-        preserve_permissions: archive.inner.preserve_permissions,
-        preserve_mtime: archive.inner.preserve_mtime,
+        unpack_xattrs: *unpack_xattrs,
+        preserve_permissions: *preserve_permissions,
+        preserve_mtime: *preserve_mtime,
         read_state: None,
     };
 
@@ -460,7 +459,7 @@ fn poll_next_raw<R: Read + Unpin>(
 }
 
 fn poll_parse_sparse_header<R: Read + Unpin>(
-    mut archive: Archive<R>,
+    archive: Archive<R>,
     next: &mut u64,
     current_ext: &mut Option<GnuExtSparseHeader>,
     current_ext_pos: &mut usize,
@@ -551,7 +550,7 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
             let ext = current_ext.as_mut().unwrap();
             while ext.is_extended() {
                 match async_std::task::ready!(poll_try_read_all(
-                    &mut archive,
+                    archive.clone(),
                     cx,
                     ext.as_mut_bytes(),
                     current_ext_pos,
@@ -591,13 +590,14 @@ impl<R: Read + Unpin> Read for Archive<R> {
         cx: &mut Context<'_>,
         into: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        let mut r = Pin::new(&Pin::new(&mut &*self.inner).obj).borrow_mut();
+        let mut lock = self.inner.lock().unwrap();
+        let mut inner = Pin::new(&mut *lock);
+        let r = Pin::new(&mut inner.obj);
 
-        let res =
-            async_std::task::ready!(crate::pin_cell::PinMut::as_mut(&mut r).poll_read(cx, into));
+        let res = async_std::task::ready!(r.poll_read(cx, into));
         match res {
             Ok(i) => {
-                self.inner.pos.set(self.inner.pos.get() + i as u64);
+                inner.pos += i as u64;
                 Poll::Ready(Ok(i))
             }
             Err(err) => Poll::Ready(Err(err)),
@@ -654,4 +654,14 @@ fn poll_skip<R: Read + Unpin>(
     }
 
     Poll::Ready(Ok(()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    assert_impl_all!(async_std::fs::File: Send, Sync);
+    assert_impl_all!(Entries<async_std::fs::File>: Send, Sync);
+    assert_impl_all!(Archive<async_std::fs::File>: Send, Sync);
+    assert_impl_all!(Entry<Archive<async_std::fs::File>>: Send, Sync);
 }

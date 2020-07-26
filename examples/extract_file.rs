@@ -19,7 +19,7 @@ fn main() {
     async_std::task::block_on(async {
         let first_arg = args_os().nth(1).unwrap();
         let filename = Path::new(&first_arg);
-        let mut ar = Archive::new(stdin());
+        let ar = Archive::new(stdin());
         let mut entries = ar.entries().unwrap();
         while let Some(file) = entries.next().await {
             let mut f = file.unwrap();
