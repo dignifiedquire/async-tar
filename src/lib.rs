@@ -39,7 +39,6 @@ mod entry_type;
 mod error;
 mod header;
 mod pax;
-// mod pin_cell;
 
 #[cfg(test)]
 #[macro_use]
