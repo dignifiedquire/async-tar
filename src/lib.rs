@@ -39,7 +39,10 @@ mod entry_type;
 mod error;
 mod header;
 mod pax;
-mod pin_cell;
+
+#[cfg(test)]
+#[macro_use]
+extern crate static_assertions;
 
 fn other(msg: &str) -> Error {
     Error::new(ErrorKind::Other, msg)
