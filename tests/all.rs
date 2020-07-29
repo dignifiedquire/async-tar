@@ -490,7 +490,7 @@ async fn extracting_malicious_tarball() {
 
     {
         let mut a = Builder::new(&mut evil_tar);
-        async fn append<R: Write + Unpin>(a: &mut Builder<R>, path: &'static str) {
+        async fn append<R: Write + Unpin + Send + Sync>(a: &mut Builder<R>, path: &'static str) {
             let mut header = Header::new_gnu();
             assert!(header.set_path(path).is_err(), "was ok: {:?}", path);
             {
