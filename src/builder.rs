@@ -116,7 +116,7 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// #
     /// # Ok(()) }) }
     /// ```
-    pub async fn append<R: Read + Unpin + Sync + Send>(
+    pub async fn append<R: Read + Unpin + Send>(
         &mut self,
         header: &Header,
         mut data: R,
@@ -170,7 +170,7 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// #
     /// # Ok(()) }) }
     /// ```
-    pub async fn append_data<P: AsRef<Path>, R: Read + Unpin + Sync + Send>(
+    pub async fn append_data<P: AsRef<Path>, R: Read + Unpin + Send>(
         &mut self,
         header: &mut Header,
         path: P,
@@ -406,9 +406,9 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
 }
 
 async fn append(
-    mut dst: &mut (dyn Write + Unpin + Send + Sync),
+    mut dst: &mut (dyn Write + Unpin + Send),
     header: &Header,
-    mut data: &mut (dyn Read + Unpin + Send + Sync),
+    mut data: &mut (dyn Read + Unpin + Send),
 ) -> io::Result<()> {
     dst.write_all(header.as_bytes()).await?;
     let len = io::copy(&mut data, &mut dst).await?;
