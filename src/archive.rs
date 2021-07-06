@@ -561,7 +561,7 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
                 }
 
                 *next += 512;
-                for block in ext.sparse.iter() {
+                for block in &ext.sparse {
                     add_block(block)?;
                 }
             }

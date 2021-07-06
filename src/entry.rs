@@ -361,26 +361,23 @@ impl<R: Read + Unpin> EntryFields<R> {
     }
 
     fn path_bytes(&self) -> Cow<[u8]> {
-        match self.long_pathname {
-            Some(ref bytes) => {
-                if let Some(&0) = bytes.last() {
-                    Cow::Borrowed(&bytes[..bytes.len() - 1])
-                } else {
-                    Cow::Borrowed(bytes)
+        if let Some(ref bytes) = self.long_pathname {
+            if let Some(&0) = bytes.last() {
+                Cow::Borrowed(&bytes[..bytes.len() - 1])
+            } else {
+                Cow::Borrowed(bytes)
+            }
+        } else {
+            if let Some(ref pax) = self.pax_extensions {
+                let pax = pax_extensions(pax)
+                    .filter_map(Result::ok)
+                    .find(|f| f.key_bytes() == b"path")
+                    .map(|f| f.value_bytes());
+                if let Some(field) = pax {
+                    return Cow::Borrowed(field);
                 }
             }
-            None => {
-                if let Some(ref pax) = self.pax_extensions {
-                    let pax = pax_extensions(pax)
-                        .filter_map(|f| f.ok())
-                        .find(|f| f.key_bytes() == b"path")
-                        .map(|f| f.value_bytes());
-                    if let Some(field) = pax {
-                        return Cow::Borrowed(field);
-                    }
-                }
-                self.header.path_bytes()
-            }
+            self.header.path_bytes()
         }
     }
 
@@ -633,19 +630,19 @@ impl<R: Read + Unpin> EntryFields<R> {
                 .create_new(true)
                 .open(dst)
                 .await
-        };
+        }
         let mut f = async {
             let mut f = match open(dst).await {
                 Ok(f) => Ok(f),
                 Err(err) => {
-                    if err.kind() != ErrorKind::AlreadyExists {
-                        Err(err)
-                    } else {
+                    if err.kind() == ErrorKind::AlreadyExists {
                         match fs::remove_file(dst).await {
                             Ok(()) => open(dst).await,
                             Err(ref e) if e.kind() == io::ErrorKind::NotFound => open(dst).await,
                             Err(e) => Err(e),
                         }
+                    } else {
+                        Err(err)
                     }
                 }
             }?;
@@ -779,7 +776,7 @@ impl<R: Read + Unpin> EntryFields<R> {
                 _ => return Ok(()),
             };
             let exts = exts
-                .filter_map(|e| e.ok())
+                .filter_map(Result::ok)
                 .filter_map(|e| {
                     let key = e.key_bytes();
                     let prefix = b"SCHILY.xattr.";
@@ -888,10 +885,9 @@ impl<R: Read + Unpin> Read for EntryFields<R> {
                         return Poll::Pending;
                     }
                 }
-            } else {
-                // Unable to pull another value from `data`, so we are done.
-                return Poll::Ready(Ok(0));
             }
+            // Unable to pull another value from `data`, so we are done.
+            return Poll::Ready(Ok(0));
         }
     }
 }
