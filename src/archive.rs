@@ -141,7 +141,7 @@ impl<R: Read + Unpin> Archive<R> {
                 preserve_permissions: false,
                 preserve_mtime: true,
                 ignore_zeros: false,
-                obj: obj,
+                obj,
                 pos: 0,
             })),
         }
