@@ -2,7 +2,8 @@ name: CI
 on: [push, pull_request]
 
 jobs:
-  test:
+
+  check:
     name: Test
     runs-on: ${{ matrix.os }}
     strategy:
@@ -25,39 +26,40 @@ jobs:
             os: windows-latest
             rust: stable
     steps:
-    - uses: actions/checkout@master
-    - name: Install Rust (rustup)
-      run: rustup update ${{ matrix.rust }} --no-self-update && rustup default ${{ matrix.rust }}
-      if: matrix.os != 'macos-latest'
-      shell: bash
-    - name: Install Rust (macos)
-      run: |
-        curl https://sh.rustup.rs | sh -s -- -y
-        echo "##[add-path]$HOME/.cargo/bin"
-      if: matrix.os == 'macos-latest'
-    - run: cargo test
-    - run: cargo test --no-default-features
-
-  check_fmt_and_docs:
-    name: Checking fmt and docs
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust }}
+      - uses: actions-rs/cargo@v1
+        with:
+          command: test
+  
+  fmt:
+    name: Check formatting
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@master
-
-    - uses: actions-rs/toolchain@v1
-      with:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
           profile: minimal
           toolchain: nightly
-          override: true
           components: rustfmt
+      - uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
 
-    - name: setup
-      run: |
-        rustup component add rustfmt
-        rustc --version
-
-    - name: fmt
-      run: cargo fmt --all -- --check
-
-    - name: Docs
-      run: cargo doc
+  docs:
+    name: Check docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly
+      - uses: actions-rs/cargo@v1
+        with:
+          command: doc
+          args: --no-deps
