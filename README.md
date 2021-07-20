@@ -79,6 +79,10 @@ fn main() {
 }
 ```
 
+# MSRV
+
+Minimal stable rust version: 1.51
+
 # License
 
 This project is licensed under either of
