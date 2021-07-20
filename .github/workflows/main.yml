@@ -36,6 +36,7 @@ jobs:
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
+          override: true
           toolchain: ${{ matrix.rust }}
       - uses: actions-rs/cargo@v1
         with:
