@@ -83,6 +83,8 @@ fn main() {
 
 Minimal stable rust version: 1.51
 
+*An increase to the MSRV is accompanied by a minor version bump*
+
 # License
 
 This project is licensed under either of
