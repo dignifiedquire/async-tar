@@ -19,18 +19,18 @@ contents are never required to be entirely resident in memory all at once.
 """
 
 [dependencies]
+async-std = { version = "1.6.0", default-features = false }
 filetime = "0.2.8"
-async-std = { version = "1.6.0", features = ["unstable"] }
 pin-project = "0.4.21"
 
 [dev-dependencies]
-tempfile = "3"
 async-std = { version = "1.6.0", features = ["unstable", "attributes"] }
 static_assertions = "1.1.0"
+tempfile = "3"
 
 [target."cfg(unix)".dependencies]
-xattr = { version = "0.2", optional = true }
 libc = "0.2"
+xattr = { version = "0.2", optional = true }
 
 [target.'cfg(target_os = "redox")'.dependencies]
 redox_syscall = "0.1"
