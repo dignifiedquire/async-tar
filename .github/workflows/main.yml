@@ -11,8 +11,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        build: [stable, beta, nightly, macos, windows]
+        build: [msrv, stable, beta, nightly, macos, windows]
         include:
+          - build: msrv
+            os: ubuntu-latest
+            rust: 1.51
           - build: stable
             os: ubuntu-latest
             rust: stable
@@ -33,6 +36,7 @@ jobs:
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
+          override: true
           toolchain: ${{ matrix.rust }}
       - uses: actions-rs/cargo@v1
         with:
