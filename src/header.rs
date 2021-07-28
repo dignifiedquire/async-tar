@@ -309,7 +309,7 @@ impl Header {
         if self.entry_type().is_gnu_sparse() {
             self.as_gnu()
                 .ok_or_else(|| other("sparse header was not a gnu header"))
-                .and_then(|h| h.real_size())
+                .and_then(GnuHeader::real_size)
         } else {
             self.entry_size()
         }
@@ -397,10 +397,10 @@ impl Header {
     /// separators.
     pub fn link_name_bytes(&self) -> Option<Cow<[u8]>> {
         let old = self.as_old();
-        if old.linkname[0] != 0 {
-            Some(Cow::Borrowed(truncate(&old.linkname)))
-        } else {
+        if old.linkname[0] == 0 {
             None
+        } else {
+            Some(Cow::Borrowed(truncate(&old.linkname)))
         }
     }
 
@@ -1103,8 +1103,8 @@ impl GnuHeader {
     fn fullname_lossy(&self) -> String {
         format!(
             "{}:{}",
-            String::from_utf8_lossy(&self.groupname_bytes()),
-            String::from_utf8_lossy(&self.username_bytes()),
+            String::from_utf8_lossy(self.groupname_bytes()),
+            String::from_utf8_lossy(self.username_bytes()),
         )
     }
 
@@ -1406,10 +1406,10 @@ fn num_field_wrapper_into(dst: &mut [u8], src: u64) {
 // Wrapper to figure out if we should read the header field in binary (numeric
 // extension) or octal (standard encoding).
 fn num_field_wrapper_from(src: &[u8]) -> io::Result<u64> {
-    if src[0] & 0x80 != 0 {
-        Ok(numeric_extended_from(src))
-    } else {
+    if src[0] & 0x80 == 0 {
         octal_from(src)
+    } else {
+        Ok(numeric_extended_from(src))
     }
 }
 

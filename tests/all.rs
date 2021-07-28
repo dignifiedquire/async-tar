@@ -169,13 +169,13 @@ async fn large_filename() {
     let path = td.path().join("test");
     t!(t!(File::create(&path).await).write_all(b"test").await);
 
-    let filename = repeat("abcd/").take(50).collect::<String>();
+    let filename = "abcd/".repeat(50);
     let mut header = Header::new_ustar();
     header.set_path(&filename).unwrap();
     header.set_metadata(&t!(fs::metadata(&path).await));
     header.set_cksum();
     t!(ar.append(&header, &b"test"[..]).await);
-    let too_long = repeat("abcd").take(200).collect::<String>();
+    let too_long = "abcd".repeat(200);
     t!(ar
         .append_file(&too_long, &mut t!(File::open(&path).await))
         .await);
@@ -808,7 +808,7 @@ async fn encoded_long_name_has_trailing_nul() {
     t!(t!(File::create(&path).await).write_all(b"test").await);
 
     let mut b = Builder::new(Vec::<u8>::new());
-    let long = repeat("abcd").take(200).collect::<String>();
+    let long = "abcd".repeat(200);
 
     t!(b.append_file(&long, &mut t!(File::open(&path).await)).await);
 
@@ -978,8 +978,8 @@ async fn append_path_symlink() {
     ar.follow_symlinks(false);
     let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
 
-    let long_linkname = repeat("abcd").take(30).collect::<String>();
-    let long_pathname = repeat("dcba").take(30).collect::<String>();
+    let long_linkname = "abcd".repeat(30);
+    let long_pathname = "dcba".repeat(30);
     t!(env::set_current_dir(td.path()));
     // "short" path name / short link name
     t!(symlink("testdest", "test"));

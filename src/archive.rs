@@ -141,7 +141,7 @@ impl<R: Read + Unpin> Archive<R> {
                 preserve_permissions: false,
                 preserve_mtime: true,
                 ignore_zeros: false,
-                obj: obj,
+                obj,
                 pos: 0,
             })),
         }
@@ -268,7 +268,7 @@ impl<R: Read + Unpin> Stream for Entries<R> {
             let archive = self.archive.clone();
             let (next, current_header, current_header_pos, _) = &mut self.current;
             let entry = ready_opt_err!(poll_next_raw(
-                archive,
+                &archive,
                 next,
                 current_header,
                 current_header_pos,
@@ -325,7 +325,7 @@ impl<R: Read + Unpin> Stream for Entries<R> {
             let archive = self.archive.clone();
             let (next, _, current_pos, current_ext) = &mut self.current;
             ready_err!(poll_parse_sparse_header(
-                archive,
+                &archive,
                 next,
                 current_ext,
                 current_pos,
@@ -350,12 +350,12 @@ impl<R: Read + Unpin> Stream for RawEntries<R> {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let archive = self.archive.clone();
         let (next, current_header, current_header_pos) = &mut self.current;
-        poll_next_raw(archive, next, current_header, current_header_pos, cx)
+        poll_next_raw(&archive, next, current_header, current_header_pos, cx)
     }
 }
 
 fn poll_next_raw<R: Read + Unpin>(
-    archive: Archive<R>,
+    archive: &Archive<R>,
     next: &mut u64,
     current_header: &mut Option<Header>,
     current_header_pos: &mut usize,
@@ -424,7 +424,6 @@ fn poll_next_raw<R: Read + Unpin>(
     let size = header.entry_size()?;
 
     let data = EntryIo::Data(archive.clone().take(size));
-    drop(header);
 
     let header = current_header.take().unwrap();
 
@@ -459,7 +458,7 @@ fn poll_next_raw<R: Read + Unpin>(
 }
 
 fn poll_parse_sparse_header<R: Read + Unpin>(
-    archive: Archive<R>,
+    archive: &Archive<R>,
     next: &mut u64,
     current_ext: &mut Option<GnuExtSparseHeader>,
     current_ext_pos: &mut usize,
@@ -535,7 +534,7 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
             data.push(EntryIo::Data(reader.clone().take(len)));
             Ok(())
         };
-        for block in gnu.sparse.iter() {
+        for block in &gnu.sparse {
             add_block(block)?
         }
         if gnu.is_extended() {
@@ -561,7 +560,7 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
                 }
 
                 *next += 512;
-                for block in ext.sparse.iter() {
+                for block in &ext.sparse {
                     add_block(block)?;
                 }
             }
