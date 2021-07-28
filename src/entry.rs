@@ -476,7 +476,7 @@ impl<R: Read + Unpin> EntryFields<R> {
             })?;
         }
 
-        let canon_target = self.validate_inside_dst(&dst, parent).await?;
+        let canon_target = self.validate_inside_dst(dst, parent).await?;
 
         self.unpack(Some(&canon_target), &file_dst)
             .await

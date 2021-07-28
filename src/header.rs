@@ -1103,8 +1103,8 @@ impl GnuHeader {
     fn fullname_lossy(&self) -> String {
         format!(
             "{}:{}",
-            String::from_utf8_lossy(&self.groupname_bytes()),
-            String::from_utf8_lossy(&self.username_bytes()),
+            String::from_utf8_lossy(self.groupname_bytes()),
+            String::from_utf8_lossy(self.username_bytes()),
         )
     }
 
@@ -1482,7 +1482,7 @@ fn copy_path_into(mut slot: &mut [u8], path: &Path, is_link_name: bool) -> io::R
     for component in path.components() {
         let bytes = path2bytes(Path::new(component.as_os_str()))?;
         match (component, is_link_name) {
-            (Component::Prefix(..) | Component::RootDir, false) => {
+            (Component::Prefix(..), false) | (Component::RootDir, false) => {
                 return Err(other("paths in archives must be relative"));
             }
             (Component::ParentDir, false) => {

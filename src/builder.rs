@@ -178,7 +178,7 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     ) -> io::Result<()> {
         prepare_header_path(self.get_mut(), header, path.as_ref()).await?;
         header.set_cksum();
-        self.append(&header, data).await?;
+        self.append(header, data).await?;
 
         Ok(())
     }
@@ -524,7 +524,7 @@ async fn prepare_header_path(
     // long name extension by emitting an entry which indicates that it's the
     // filename.
     if let Err(e) = header.set_path(path) {
-        let data = path2bytes(&path)?;
+        let data = path2bytes(path)?;
         let max = header.as_old().name.len();
         //  Since e isn't specific enough to let us know the path is indeed too
         //  long, verify it first before using the extension.
@@ -550,7 +550,7 @@ async fn prepare_header_link(
 ) -> io::Result<()> {
     // Same as previous function but for linkname
     if let Err(e) = header.set_link_name(&link_name) {
-        let data = path2bytes(&link_name)?;
+        let data = path2bytes(link_name)?;
         if data.len() < header.as_old().linkname.len() {
             return Err(e);
         }

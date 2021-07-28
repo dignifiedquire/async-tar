@@ -18,6 +18,7 @@
 //     all just super thin wrappers (e.g. easy to codegen).
 
 #![deny(missing_docs)]
+#![deny(clippy::all)]
 
 use std::io::{Error, ErrorKind};
 
