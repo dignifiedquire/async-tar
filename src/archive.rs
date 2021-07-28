@@ -424,7 +424,6 @@ fn poll_next_raw<R: Read + Unpin>(
     let size = header.entry_size()?;
 
     let data = EntryIo::Data(archive.clone().take(size));
-    drop(header);
 
     let header = current_header.take().unwrap();
 
