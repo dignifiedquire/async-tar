@@ -1,7 +1,10 @@
 extern crate async_tar;
 extern crate tempfile;
 
-use async_std::{fs::File, prelude::*};
+use async_std::{
+    fs::{create_dir, File},
+    prelude::*,
+};
 
 use tempfile::Builder;
 
@@ -216,6 +219,36 @@ async fn modify_link_just_created() {
     t!(File::open(td.path().join("bar/bar")).await);
     t!(File::open(td.path().join("foo/foo")).await);
     t!(File::open(td.path().join("foo/bar")).await);
+}
+
+#[async_std::test]
+#[cfg(not(windows))] // dangling symlinks have weird permissions
+async fn modify_outside_with_relative_symlink() {
+    let mut ar = async_tar::Builder::new(Vec::new());
+
+    let mut header = async_tar::Header::new_gnu();
+    header.set_size(0);
+    header.set_entry_type(async_tar::EntryType::Symlink);
+    t!(header.set_path("symlink"));
+    t!(header.set_link_name(".."));
+    header.set_cksum();
+    t!(ar.append(&header, &[][..]).await);
+
+    let mut header = async_tar::Header::new_gnu();
+    header.set_size(0);
+    header.set_entry_type(async_tar::EntryType::Regular);
+    t!(header.set_path("symlink/foo/bar"));
+    header.set_cksum();
+    t!(ar.append(&header, &[][..]).await);
+
+    let bytes = t!(ar.into_inner().await);
+    let ar = async_tar::Archive::new(&bytes[..]);
+
+    let td = t!(Builder::new().prefix("tar").tempdir());
+    let tar_dir = td.path().join("tar");
+    create_dir(&tar_dir).await.unwrap();
+    assert!(ar.unpack(tar_dir).await.is_err());
+    assert!(!td.path().join("foo").exists());
 }
 
 #[async_std::test]

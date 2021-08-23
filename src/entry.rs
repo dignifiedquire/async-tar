@@ -470,11 +470,9 @@ impl<R: Read + Unpin> EntryFields<R> {
             None => return Ok(false),
         };
 
-        if parent.symlink_metadata().await.is_err() {
-            fs::create_dir_all(&parent).await.map_err(|e| {
-                TarError::new(&format!("failed to create `{}`", parent.display()), e)
-            })?;
-        }
+        self.ensure_dir_created(&dst, parent).await.map_err(|e| {
+            TarError::new(&format!("failed to create `{}`", parent.display()), dbg!(e))
+        })?;
 
         let canon_target = self.validate_inside_dst(dst, parent).await?;
 
@@ -819,18 +817,38 @@ impl<R: Read + Unpin> EntryFields<R> {
         }
     }
 
+    async fn ensure_dir_created(&self, dst: &Path, dir: &Path) -> io::Result<()> {
+        let mut ancestor = dir;
+        let mut dirs_to_create = Vec::new();
+        while ancestor.symlink_metadata().await.is_err() {
+            dirs_to_create.push(ancestor);
+            if let Some(parent) = ancestor.parent() {
+                ancestor = parent;
+            } else {
+                break;
+            }
+        }
+        for ancestor in dirs_to_create.into_iter().rev() {
+            if let Some(parent) = ancestor.parent() {
+                self.validate_inside_dst(dst, parent).await?;
+            }
+            fs::create_dir(ancestor).await?;
+        }
+        Ok(())
+    }
+
     async fn validate_inside_dst(&self, dst: &Path, file_dst: &Path) -> io::Result<PathBuf> {
         // Abort if target (canonical) parent is outside of `dst`
         let canon_parent = file_dst.canonicalize().await.map_err(|err| {
             Error::new(
                 err.kind(),
-                format!("{} while canonicalizing {}", err, file_dst.display()),
+                format!("{} while canonicalizing {}", dbg!(err), file_dst.display()),
             )
         })?;
         let canon_target = dst.canonicalize().await.map_err(|err| {
             Error::new(
                 err.kind(),
-                format!("{} while canonicalizing {}", err, dst.display()),
+                format!("{} while canonicalizing {}", dbg!(err), dst.display()),
             )
         })?;
         if !canon_parent.starts_with(&canon_target) {
