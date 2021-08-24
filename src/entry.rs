@@ -470,9 +470,9 @@ impl<R: Read + Unpin> EntryFields<R> {
             None => return Ok(false),
         };
 
-        self.ensure_dir_created(&dst, parent).await.map_err(|e| {
-            TarError::new(&format!("failed to create `{}`", parent.display()), dbg!(e))
-        })?;
+        self.ensure_dir_created(dst, parent)
+            .await
+            .map_err(|e| TarError::new(&format!("failed to create `{}`", parent.display()), e))?;
 
         let canon_target = self.validate_inside_dst(dst, parent).await?;
 
@@ -842,13 +842,13 @@ impl<R: Read + Unpin> EntryFields<R> {
         let canon_parent = file_dst.canonicalize().await.map_err(|err| {
             Error::new(
                 err.kind(),
-                format!("{} while canonicalizing {}", dbg!(err), file_dst.display()),
+                format!("{} while canonicalizing {}", err, file_dst.display()),
             )
         })?;
         let canon_target = dst.canonicalize().await.map_err(|err| {
             Error::new(
                 err.kind(),
-                format!("{} while canonicalizing {}", dbg!(err), dst.display()),
+                format!("{} while canonicalizing {}", err, dst.display()),
             )
         })?;
         if !canon_parent.starts_with(&canon_target) {

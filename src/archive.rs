@@ -5,7 +5,7 @@ use std::{
 };
 
 use async_std::{
-    io,
+    fs, io,
     io::prelude::*,
     path::Path,
     prelude::*,
@@ -224,10 +224,40 @@ impl<R: Read + Unpin> Archive<R> {
     pub async fn unpack<P: AsRef<Path>>(self, dst: P) -> io::Result<()> {
         let mut entries = self.entries()?;
         let mut pinned = Pin::new(&mut entries);
+        let dst = dst.as_ref();
+
+        if dst.symlink_metadata().await.is_err() {
+            fs::create_dir_all(&dst)
+                .await
+                .map_err(|e| TarError::new(&format!("failed to create `{}`", dst.display()), e))?;
+        }
+
+        // Canonicalizing the dst directory will prepend the path with '\\?\'
+        // on windows which will allow windows APIs to treat the path as an
+        // extended-length path with a 32,767 character limit. Otherwise all
+        // unpacked paths over 260 characters will fail on creation with a
+        // NotFound exception.
+        let dst = &dst
+            .canonicalize()
+            .await
+            .unwrap_or_else(|_| dst.to_path_buf());
+
+        // Delay any directory entries until the end (they will be created if needed by
+        // descendants), to ensure that directory permissions do not interfer with descendant
+        // extraction.
+        let mut directories = Vec::new();
         while let Some(entry) = pinned.next().await {
             let mut file = entry.map_err(|e| TarError::new("failed to iterate over archive", e))?;
-            file.unpack_in(dst.as_ref()).await?;
+            if file.header().entry_type() == crate::EntryType::Directory {
+                directories.push(file);
+            } else {
+                file.unpack_in(dst).await?;
+            }
         }
+        for mut dir in directories {
+            dir.unpack_in(dst).await?;
+        }
+
         Ok(())
     }
 }
