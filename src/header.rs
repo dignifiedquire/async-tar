@@ -122,6 +122,7 @@ pub struct GnuSparseHeader {
 /// the next entry will be one of these headers.
 #[repr(C)]
 #[allow(missing_docs)]
+#[derive(Debug)]
 pub struct GnuExtSparseHeader {
     pub sparse: [GnuSparseHeader; 21],
     pub isextended: [u8; 1],
