@@ -1517,7 +1517,7 @@ fn copy_path_into(mut slot: &mut [u8], path: &Path, is_link_name: bool) -> io::R
 
     fn copy(slot: &mut &mut [u8], bytes: &[u8]) -> io::Result<()> {
         copy_into(*slot, bytes)?;
-        let tmp = mem::replace(slot, &mut []);
+        let tmp = std::mem::take(slot);
         *slot = &mut tmp[bytes.len()..];
         Ok(())
     }
