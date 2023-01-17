@@ -86,7 +86,7 @@ fn main() {
 
 # MSRV
 
-Minimal stable rust version: 1.51
+Minimal stable rust version: 1.56
 
 *An increase to the MSRV is accompanied by a minor version bump*
 
