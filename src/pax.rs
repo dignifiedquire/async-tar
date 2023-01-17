@@ -1,6 +1,9 @@
 use std::{slice, str};
 
+#[cfg(feature = "runtime-async-std")]
 use async_std::io;
+#[cfg(feature = "runtime-tokio")]
+use tokio::io;
 
 use crate::other;
 
