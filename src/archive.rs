@@ -6,11 +6,13 @@ use std::{
 };
 
 #[cfg(feature = "runtime-async-std")]
-use async_std::{fs, io, io::prelude::*, path::Path};
-use futures_util::{
-    ready,
+use async_std::{
+    fs, io,
+    io::prelude::*,
+    path::Path,
     stream::{Stream, StreamExt},
 };
+use futures_core::ready;
 use pin_project::pin_project;
 #[cfg(feature = "runtime-tokio")]
 use std::path::Path;
@@ -19,6 +21,8 @@ use tokio::{
     fs,
     io::{self, AsyncRead as Read, AsyncReadExt},
 };
+#[cfg(feature = "runtime-tokio")]
+use tokio_stream::{Stream, StreamExt};
 
 use crate::{
     Entry, GnuExtSparseHeader, GnuSparseHeader, Header,

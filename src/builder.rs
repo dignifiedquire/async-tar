@@ -9,7 +9,6 @@ use async_std::{
     path::Path,
     prelude::*,
 };
-use futures_util::stream::StreamExt;
 #[cfg(feature = "runtime-tokio")]
 use std::fs::Metadata;
 #[cfg(feature = "runtime-tokio")]
@@ -19,6 +18,8 @@ use tokio::{
     fs,
     io::{self, AsyncRead as Read, AsyncReadExt, AsyncWrite as Write, AsyncWriteExt},
 };
+#[cfg(feature = "runtime-tokio")]
+use tokio_stream::StreamExt;
 
 use crate::{
     header::{bytes2path, path2bytes, HeaderMode},

@@ -8,13 +8,15 @@
 use async_std::{
     io::{copy, stdin, stdout},
     path::Path,
+    stream::StreamExt,
 };
-use futures_util::stream::StreamExt;
 use std::env::args_os;
 #[cfg(feature = "runtime-tokio")]
 use std::path::Path;
 #[cfg(feature = "runtime-tokio")]
 use tokio::io::{copy, stdin, stdout};
+#[cfg(feature = "runtime-tokio")]
+use tokio_stream::StreamExt;
 
 use async_tar::Archive;
 

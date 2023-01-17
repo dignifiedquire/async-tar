@@ -3,10 +3,11 @@
 //! Takes a tarball on stdin and prints out all of the entries inside.
 
 #[cfg(feature = "runtime-async-std")]
-use async_std::io::stdin;
-use futures_util::stream::StreamExt;
+use async_std::{io::stdin, stream::StreamExt};
 #[cfg(feature = "runtime-tokio")]
 use tokio::io::stdin;
+#[cfg(feature = "runtime-tokio")]
+use tokio_stream::StreamExt;
 
 use async_tar::Archive;
 

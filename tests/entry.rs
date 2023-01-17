@@ -5,12 +5,12 @@ use async_std::{
 };
 
 #[cfg(feature = "runtime-tokio")]
-use futures_util::stream::StreamExt;
-#[cfg(feature = "runtime-tokio")]
 use tokio::{
     fs::{self, create_dir, File},
     io::AsyncReadExt,
 };
+#[cfg(feature = "runtime-tokio")]
+use tokio_stream::StreamExt;
 
 use tempfile::Builder;
 
