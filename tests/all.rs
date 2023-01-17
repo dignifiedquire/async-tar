@@ -5,10 +5,10 @@ use async_std::{
     fs::{self, File},
     io::{self, Read, ReadExt, Write, WriteExt},
     path::{Path, PathBuf},
+    stream::StreamExt,
 };
 use async_tar::{Archive, ArchiveBuilder, Builder, EntryType, Header};
 use filetime::FileTime;
-use futures_util::stream::StreamExt;
 #[cfg(feature = "runtime-tokio")]
 use std::path::{Path, PathBuf};
 use tempfile::{Builder as TempBuilder, TempDir};
@@ -17,6 +17,8 @@ use tokio::{
     fs::{self, File},
     io::{self, AsyncRead as Read, AsyncReadExt, AsyncWrite as Write, AsyncWriteExt},
 };
+#[cfg(feature = "runtime-tokio")]
+use tokio_stream::StreamExt;
 
 macro_rules! t {
     ($e:expr) => {
@@ -468,7 +470,7 @@ async fn unpack_old_style_bsd_dir() {
     // Iterating
     let rdr = ar.into_inner().map_err(|_| ()).unwrap();
     let ar = Archive::new(rdr);
-    assert!(t!(ar.entries()).all(|fr| async move { fr.is_ok() }).await);
+    assert!(t!(ar.entries()).all(|fr| fr.is_ok()).await);
 
     assert!(td.path().join("testdir").is_dir());
 }
@@ -500,7 +502,7 @@ async fn handling_incorrect_file_size() {
     let _ = ar.into_inner().map_err(|_| ()).unwrap();
     println!("iterating");
     let ar = Archive::new(&rdr[..]);
-    assert!(t!(ar.entries()).any(|fr| async move { fr.is_err() }).await);
+    assert!(t!(ar.entries()).any(|fr| fr.is_err()).await);
 }
 
 #[cfg_attr(feature = "runtime-async-std", async_std::test)]
@@ -1092,7 +1094,7 @@ async fn name_with_slash_doesnt_fool_long_link_and_bsd_compat() {
     // Iterating
     let rdr = ar.into_inner().map_err(|_| ()).unwrap();
     let ar = Archive::new(rdr);
-    assert!(t!(ar.entries()).all(|fr| async move { fr.is_ok() }).await);
+    assert!(t!(ar.entries()).all(|fr| fr.is_ok()).await);
 
     assert!(td.path().join("foo").is_file());
 }

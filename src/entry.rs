@@ -12,7 +12,7 @@ use async_std::{
     io::{self, prelude::*, Error, ErrorKind, SeekFrom},
     path::{Component, Path, PathBuf},
 };
-use futures_util::ready;
+use futures_core::ready;
 use pin_project::pin_project;
 #[cfg(feature = "runtime-tokio")]
 use std::{

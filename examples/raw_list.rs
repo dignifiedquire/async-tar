@@ -5,9 +5,9 @@
 #[cfg(feature = "runtime-async-std")]
 use async_std::{io::stdin, prelude::*};
 #[cfg(feature = "runtime-tokio")]
-use futures_util::stream::StreamExt;
-#[cfg(feature = "runtime-tokio")]
 use tokio::io::stdin;
+#[cfg(feature = "runtime-tokio")]
+use tokio_stream::StreamExt;
 
 use async_tar::Archive;
 
