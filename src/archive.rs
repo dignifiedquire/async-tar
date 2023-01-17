@@ -13,7 +13,6 @@ use async_std::{
     stream::{Stream, StreamExt},
 };
 use futures_core::ready;
-use pin_project::pin_project;
 #[cfg(feature = "runtime-tokio")]
 use std::path::Path;
 #[cfg(feature = "runtime-tokio")]
@@ -49,7 +48,6 @@ impl<R: Read + Unpin> Clone for Archive<R> {
     }
 }
 
-#[pin_project]
 #[derive(Debug)]
 pub struct ArchiveInner<R: Read + Unpin> {
     pos: u64,
@@ -57,7 +55,6 @@ pub struct ArchiveInner<R: Read + Unpin> {
     preserve_permissions: bool,
     preserve_mtime: bool,
     ignore_zeros: bool,
-    #[pin]
     obj: R,
 }
 
@@ -286,7 +283,6 @@ struct State {
 }
 
 /// Stream of `Entry`s.
-#[pin_project]
 #[derive(Debug)]
 pub struct Entries<R: Read + Unpin> {
     archive: Archive<R>,
@@ -319,22 +315,30 @@ macro_rules! ready_err {
 impl<R: Read + Unpin> Stream for Entries<R> {
     type Item = io::Result<Entry<Archive<R>>>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut this = self.project();
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
+            let Self {
+                current,
+                fields,
+                gnu_longname,
+                gnu_longlink,
+                pax_extensions,
+                archive,
+                ..
+            } = &mut *self;
             let State {
                 next,
                 current_header,
                 current_header_pos,
                 pax_extensions,
                 ..
-            } = &mut this.current;
+            } = current;
 
-            let fields = if let Some(fields) = this.fields.as_mut() {
+            let new_fields = if let Some(fields) = fields.as_mut() {
                 fields
             } else {
-                *this.fields = Some(EntryFields::from(ready_opt_err!(poll_next_raw(
-                    this.archive,
+                *fields = Some(EntryFields::from(ready_opt_err!(poll_next_raw(
+                    archive,
                     next,
                     current_header,
                     current_header_pos,
@@ -345,65 +349,65 @@ impl<R: Read + Unpin> Stream for Entries<R> {
             };
 
             let is_recognized_header =
-                fields.header.as_gnu().is_some() || fields.header.as_ustar().is_some();
-            if is_recognized_header && fields.header.entry_type().is_gnu_longname() {
-                if this.gnu_longname.is_some() {
+                new_fields.header.as_gnu().is_some() || new_fields.header.as_ustar().is_some();
+            if is_recognized_header && new_fields.header.entry_type().is_gnu_longname() {
+                if gnu_longname.is_some() {
                     return Poll::Ready(Some(Err(other(
                         "two long name entries describing \
                          the same member",
                     ))));
                 }
 
-                *this.gnu_longname = Some(ready_err!(Pin::new(fields).poll_read_all(cx)));
-                *this.fields = None;
+                *gnu_longname = Some(ready_err!(Pin::new(new_fields).poll_read_all(cx)));
+                *fields = None;
                 continue;
             }
 
-            if is_recognized_header && fields.header.entry_type().is_gnu_longlink() {
-                if this.gnu_longlink.is_some() {
+            if is_recognized_header && new_fields.header.entry_type().is_gnu_longlink() {
+                if gnu_longlink.is_some() {
                     return Poll::Ready(Some(Err(other(
                         "two long name entries describing \
                          the same member",
                     ))));
                 }
-                *this.gnu_longlink = Some(ready_err!(Pin::new(fields).poll_read_all(cx)));
-                *this.fields = None;
+                *gnu_longlink = Some(ready_err!(Pin::new(new_fields).poll_read_all(cx)));
+                *fields = None;
                 continue;
             }
 
-            if is_recognized_header && fields.header.entry_type().is_pax_local_extensions() {
-                if this.pax_extensions.is_some() {
+            if is_recognized_header && new_fields.header.entry_type().is_pax_local_extensions() {
+                if pax_extensions.is_some() {
                     return Poll::Ready(Some(Err(other(
                         "two pax extensions entries describing \
                          the same member",
                     ))));
                 }
-                *this.pax_extensions = Some(ready_err!(Pin::new(fields).poll_read_all(cx)));
-                this.current.pax_extensions = this.pax_extensions.clone();
-                *this.fields = None;
+                *pax_extensions = Some(ready_err!(Pin::new(new_fields).poll_read_all(cx)));
+                current.pax_extensions = pax_extensions.clone();
+                *fields = None;
                 continue;
             }
 
-            fields.long_pathname = this.gnu_longname.take();
-            fields.long_linkname = this.gnu_longlink.take();
-            fields.pax_extensions = this.pax_extensions.take();
+            new_fields.long_pathname = gnu_longname.take();
+            new_fields.long_linkname = gnu_longlink.take();
+            new_fields.pax_extensions = pax_extensions.take();
 
             let State {
                 next,
                 current_header_pos,
                 current_ext,
                 ..
-            } = &mut this.current;
+            } = current;
             ready_err!(poll_parse_sparse_header(
-                this.archive,
+                archive,
                 next,
                 current_ext,
                 current_header_pos,
-                fields,
+                new_fields,
                 cx
             ));
 
-            return Poll::Ready(Some(Ok(this.fields.take().unwrap().into_entry())));
+            return Poll::Ready(Some(Ok(self.fields.take().unwrap().into_entry())));
         }
     }
 }

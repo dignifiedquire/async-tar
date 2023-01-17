@@ -13,7 +13,6 @@ use async_std::{
     path::{Component, Path, PathBuf},
 };
 use futures_core::ready;
-use pin_project::pin_project;
 #[cfg(feature = "runtime-tokio")]
 use std::{
     fs::Permissions,
@@ -38,9 +37,7 @@ use crate::{
 /// This structure is a window into a portion of a borrowed archive which can
 /// be inspected. It acts as a file handle by implementing the Reader trait. An
 /// entry cannot be rewritten once inserted into an archive.
-#[pin_project]
 pub struct Entry<R: Read + Unpin> {
-    #[pin]
     fields: EntryFields<R>,
     _ignored: marker::PhantomData<Archive<R>>,
 }
@@ -55,7 +52,6 @@ impl<R: Read + Unpin> fmt::Debug for Entry<R> {
 
 // private implementation detail of `Entry`, but concrete (no type parameters)
 // and also all-public to be constructed from other modules.
-#[pin_project]
 pub struct EntryFields<R: Read + Unpin> {
     pub long_pathname: Option<Vec<u8>>,
     pub long_linkname: Option<Vec<u8>>,
@@ -64,12 +60,10 @@ pub struct EntryFields<R: Read + Unpin> {
     pub size: u64,
     pub header_pos: u64,
     pub file_pos: u64,
-    #[pin]
     pub data: Vec<EntryIo<R>>,
     pub unpack_xattrs: bool,
     pub preserve_permissions: bool,
     pub preserve_mtime: bool,
-    #[pin]
     pub(crate) read_state: Option<EntryIo<R>>,
 }
 
@@ -92,10 +86,9 @@ impl<R: Read + Unpin> fmt::Debug for EntryFields<R> {
     }
 }
 
-#[pin_project(project = EntryIoProject)]
 pub enum EntryIo<R: Read + Unpin> {
-    Pad(#[pin] io::Take<io::Repeat>),
-    Data(#[pin] io::Take<R>),
+    Pad(io::Take<io::Repeat>),
+    Data(io::Take<R>),
 }
 
 impl<R: Read + Unpin> fmt::Debug for EntryIo<R> {
@@ -328,24 +321,22 @@ impl<R: Read + Unpin> Entry<R> {
 #[cfg(feature = "runtime-async-std")]
 impl<R: Read + Unpin> Read for Entry<R> {
     fn poll_read(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         into: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        let mut this = self.project();
-        Pin::new(&mut *this.fields).poll_read(cx, into)
+        Pin::new(&mut self.fields).poll_read(cx, into)
     }
 }
 
 #[cfg(feature = "runtime-tokio")]
 impl<R: Read + Unpin> Read for Entry<R> {
     fn poll_read(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         into: &mut tokio::io::ReadBuf,
     ) -> Poll<io::Result<()>> {
-        let mut this = self.project();
-        Pin::new(&mut *this.fields).poll_read(cx, into)
+        Pin::new(&mut self.fields).poll_read(cx, into)
     }
 }
 
@@ -902,27 +893,25 @@ impl<R: Read + Unpin> EntryFields<R> {
 #[cfg(feature = "runtime-async-std")]
 impl<R: Read + Unpin> Read for EntryFields<R> {
     fn poll_read(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         into: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        let mut this = self.project();
         loop {
-            if this.read_state.is_none() {
-                if this.data.as_ref().is_empty() {
-                    *this.read_state = None;
+            if self.read_state.is_none() {
+                if self.data.is_empty() {
+                    self.read_state = None;
                 } else {
-                    let data = &mut *this.data;
-                    *this.read_state = Some(data.remove(0));
+                    self.read_state = Some(self.data.remove(0));
                 }
             }
 
-            if let Some(ref mut io) = &mut *this.read_state {
+            if let Some(ref mut io) = &mut self.read_state {
                 let ret = Pin::new(io).poll_read(cx, into);
                 match ret {
                     Poll::Ready(Ok(0)) => {
-                        *this.read_state = None;
-                        if this.data.as_ref().is_empty() {
+                        self.read_state = None;
+                        if self.data.is_empty() {
                             return Poll::Ready(Ok(0));
                         }
                         continue;
@@ -947,30 +936,28 @@ impl<R: Read + Unpin> Read for EntryFields<R> {
 #[cfg(feature = "runtime-tokio")]
 impl<R: Read + Unpin> Read for EntryFields<R> {
     fn poll_read(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         into: &mut tokio::io::ReadBuf,
     ) -> Poll<io::Result<()>> {
-        let mut this = self.project();
         loop {
-            if this.read_state.is_none() {
-                if this.data.as_ref().is_empty() {
-                    *this.read_state = None;
+            if self.read_state.is_none() {
+                if self.data.is_empty() {
+                    self.read_state = None;
                 } else {
-                    let data = &mut *this.data;
-                    *this.read_state = Some(data.remove(0));
+                    self.read_state = Some(self.data.remove(0));
                 }
             }
 
-            if let Some(ref mut io) = &mut *this.read_state {
+            if let Some(ref mut io) = &mut self.read_state {
                 let start = into.filled().len();
                 let ret = Pin::new(io).poll_read(cx, into);
                 match ret {
                     Poll::Ready(Ok(())) => {
                         let diff = into.filled().len() - start;
                         if diff == 0 {
-                            *this.read_state = None;
-                            if this.data.as_ref().is_empty() {
+                            self.read_state = None;
+                            if self.data.is_empty() {
                                 return Poll::Ready(Ok(()));
                             }
                             continue;
@@ -995,13 +982,13 @@ impl<R: Read + Unpin> Read for EntryFields<R> {
 #[cfg(feature = "runtime-async-std")]
 impl<R: Read + Unpin> Read for EntryIo<R> {
     fn poll_read(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         into: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        match self.project() {
-            EntryIoProject::Pad(io) => io.poll_read(cx, into),
-            EntryIoProject::Data(io) => io.poll_read(cx, into),
+        match &mut *self {
+            EntryIo::Pad(io) => Pin::new(io).poll_read(cx, into),
+            EntryIo::Data(io) => Pin::new(io).poll_read(cx, into),
         }
     }
 }
@@ -1009,13 +996,13 @@ impl<R: Read + Unpin> Read for EntryIo<R> {
 #[cfg(feature = "runtime-tokio")]
 impl<R: Read + Unpin> Read for EntryIo<R> {
     fn poll_read(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         into: &mut tokio::io::ReadBuf,
     ) -> Poll<io::Result<()>> {
-        match self.project() {
-            EntryIoProject::Pad(io) => io.poll_read(cx, into),
-            EntryIoProject::Data(io) => io.poll_read(cx, into),
+        match &mut *self {
+            EntryIo::Pad(io) => Pin::new(io).poll_read(cx, into),
+            EntryIo::Data(io) => Pin::new(io).poll_read(cx, into),
         }
     }
 }

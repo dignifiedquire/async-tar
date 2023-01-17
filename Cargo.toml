@@ -23,7 +23,6 @@ contents are never required to be entirely resident in memory all at once.
 async-std = { version = "1.12", optional = true }
 tokio = { version = "1", optional = true, features = ["fs", "io-util"] }
 filetime = "0.2.8"
-pin-project = "1.0.8"
 tokio-stream = { version = "0.1.11", features = ["fs"], optional = true }
 futures-core = "0.3.25"
 
