@@ -3,7 +3,7 @@
 //! Takes a tarball on stdin and prints out all of the entries inside.
 
 #[cfg(feature = "runtime-async-std")]
-use async_std::{io::stdin, prelude::*};
+use async_std::io::stdin;
 use futures_util::stream::StreamExt;
 #[cfg(feature = "runtime-tokio")]
 use tokio::io::stdin;

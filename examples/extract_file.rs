@@ -8,7 +8,6 @@
 use async_std::{
     io::{copy, stdin, stdout},
     path::Path,
-    prelude::*,
 };
 use futures_util::stream::StreamExt;
 use std::env::args_os;

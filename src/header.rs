@@ -7,7 +7,7 @@ use std::{borrow::Cow, fmt, iter, iter::repeat, mem, str};
 
 #[cfg(feature = "runtime-async-std")]
 use async_std::{
-    fs::{self, Metadata},
+    fs::Metadata,
     io,
     path::{Component, Path, PathBuf},
 };

@@ -3,13 +3,11 @@ use std::iter::repeat;
 #[cfg(feature = "runtime-async-std")]
 use async_std::{
     fs::{self, File},
-    io::{self, Read, Write},
+    io::{self, Read, ReadExt, Write, WriteExt},
     path::{Path, PathBuf},
-    prelude::*,
 };
 use async_tar::{Archive, ArchiveBuilder, Builder, EntryType, Header};
 use filetime::FileTime;
-#[cfg(feature = "runtime-tokio")]
 use futures_util::stream::StreamExt;
 #[cfg(feature = "runtime-tokio")]
 use std::path::{Path, PathBuf};
@@ -551,13 +549,15 @@ async fn handling_incorrect_file_size() {
     t!(ar.append(&header, &mut file).await);
 
     // Extracting
-    let rdr = t!(ar.into_inner().await);
+    let rdr: Vec<u8> = t!(ar.into_inner().await);
+    println!("extracting");
     let ar = Archive::new(&rdr[..]);
     assert!(ar.clone().unpack(td.path()).await.is_err());
 
     // Iterating
-    let rdr = ar.into_inner().map_err(|_| ()).unwrap();
-    let ar = Archive::new(rdr);
+    let _ = ar.into_inner().map_err(|_| ()).unwrap();
+    println!("iterating");
+    let ar = Archive::new(&rdr[..]);
     assert!(t!(ar.entries()).any(|fr| async move { fr.is_err() }).await);
 }
 
