@@ -2,24 +2,31 @@ use std::{
     cmp,
     pin::Pin,
     sync::{Arc, Mutex},
-};
-
-use async_std::{
-    fs, io,
-    io::prelude::*,
-    path::Path,
-    prelude::*,
-    stream::Stream,
     task::{Context, Poll},
 };
+
+#[cfg(feature = "runtime-async-std")]
+use async_std::{fs, io, io::prelude::*, path::Path, prelude::*};
+use futures_util::{
+    ready,
+    stream::{Stream, StreamExt},
+};
 use pin_project::pin_project;
+#[cfg(feature = "runtime-tokio")]
+use std::path::Path;
+#[cfg(feature = "runtime-tokio")]
+use tokio::{
+    fs,
+    io::{self, AsyncRead as Read, AsyncReadExt},
+};
 
 use crate::{
     Entry, GnuExtSparseHeader, GnuSparseHeader, Header,
     entry::{EntryFields, EntryIo},
     error::TarError,
-    other,
+    fs_canonicalize, other,
     pax::pax_extensions,
+    symlink_metadata,
 };
 
 /// A top-level representation of an archive file.
@@ -229,7 +236,7 @@ impl<R: Read + Unpin> Archive<R> {
         let mut pinned = Pin::new(&mut entries);
         let dst = dst.as_ref();
 
-        if dst.symlink_metadata().await.is_err() {
+        if symlink_metadata(dst).await.is_err() {
             fs::create_dir_all(&dst)
                 .await
                 .map_err(|e| TarError::new(&format!("failed to create `{}`", dst.display()), e))?;
@@ -240,8 +247,8 @@ impl<R: Read + Unpin> Archive<R> {
         // extended-length path with a 32,767 character limit. Otherwise all
         // unpacked paths over 260 characters will fail on creation with a
         // NotFound exception.
-        let dst = &dst
-            .canonicalize()
+
+        let dst = &fs_canonicalize(dst)
             .await
             .unwrap_or_else(|_| dst.to_path_buf());
 
@@ -288,7 +295,7 @@ pub struct Entries<R: Read + Unpin> {
 
 macro_rules! ready_opt_err {
     ($val:expr) => {
-        match async_std::task::ready!($val) {
+        match ready!($val) {
             Some(Ok(val)) => val,
             Some(Err(err)) => return Poll::Ready(Some(Err(err))),
             None => return Poll::Ready(None),
@@ -298,7 +305,7 @@ macro_rules! ready_opt_err {
 
 macro_rules! ready_err {
     ($val:expr) => {
-        match async_std::task::ready!($val) {
+        match futures_util::ready!($val) {
             Ok(val) => val,
             Err(err) => return Poll::Ready(Some(Err(err))),
         }
@@ -428,7 +435,7 @@ fn poll_next_raw<R: Read + Unpin>(
         // Seek to the start of the next header in the archive
         if current_header.is_none() {
             let delta = *next - archive.inner.lock().unwrap().pos;
-            match async_std::task::ready!(poll_skip(archive.clone(), cx, delta)) {
+            match futures_util::ready!(poll_skip(archive.clone(), cx, delta)) {
                 Ok(_) => {}
                 Err(err) => return Poll::Ready(Some(Err(err))),
             }
@@ -440,7 +447,7 @@ fn poll_next_raw<R: Read + Unpin>(
         let header = current_header.as_mut().unwrap();
 
         // EOF is an indicator that we are at the end of the archive.
-        match async_std::task::ready!(poll_try_read_all(
+        match ready!(poll_try_read_all(
             archive.clone(),
             cx,
             header.as_mut_bytes(),
@@ -633,7 +640,7 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
                      blocks",
                 ));
             } else if cur < off {
-                let block = io::repeat(0).take(off - cur);
+                let block = io::repeat(0).take((off - cur) as _);
                 data.push(EntryIo::Pad(block));
             }
             cur = off
@@ -662,7 +669,7 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
 
             let ext = current_ext.as_mut().unwrap();
             while ext.is_extended() {
-                match async_std::task::ready!(poll_try_read_all(
+                match ready!(poll_try_read_all(
                     archive.clone(),
                     cx,
                     ext.as_mut_bytes(),
@@ -697,6 +704,7 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
     Poll::Ready(Ok(()))
 }
 
+#[cfg(feature = "runtime-async-std")]
 impl<R: Read + Unpin> Read for Archive<R> {
     fn poll_read(
         self: Pin<&mut Self>,
@@ -707,7 +715,7 @@ impl<R: Read + Unpin> Read for Archive<R> {
         let mut inner = Pin::new(&mut *lock);
         let r = Pin::new(&mut inner.obj);
 
-        let res = async_std::task::ready!(r.poll_read(cx, into));
+        let res = ready!(r.poll_read(cx, into));
         match res {
             Ok(i) => {
                 inner.pos += i as u64;
@@ -718,10 +726,34 @@ impl<R: Read + Unpin> Read for Archive<R> {
     }
 }
 
+#[cfg(feature = "runtime-tokio")]
+impl<R: Read + Unpin> Read for Archive<R> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        into: &mut tokio::io::ReadBuf,
+    ) -> Poll<io::Result<()>> {
+        let mut lock = self.inner.lock().unwrap();
+        let mut inner = Pin::new(&mut *lock);
+        let r = Pin::new(&mut inner.obj);
+
+        let start = into.filled().len() as u64;
+        let res = ready!(r.poll_read(cx, into));
+        match res {
+            Ok(()) => {
+                inner.pos += into.filled().len() as u64 - start;
+                Poll::Ready(Ok(()))
+            }
+            Err(err) => Poll::Ready(Err(err)),
+        }
+    }
+}
+
 /// Try to fill the buffer from the reader.
 ///
 /// If the reader reaches its end before filling the buffer at all, returns `false`.
 /// Otherwise returns `true`.
+#[cfg(feature = "runtime-async-std")]
 fn poll_try_read_all<R: Read + Unpin>(
     mut source: R,
     cx: &mut Context<'_>,
@@ -729,7 +761,7 @@ fn poll_try_read_all<R: Read + Unpin>(
     pos: &mut usize,
 ) -> Poll<io::Result<bool>> {
     while *pos < buf.len() {
-        match async_std::task::ready!(Pin::new(&mut source).poll_read(cx, &mut buf[*pos..])) {
+        match ready!(Pin::new(&mut source).poll_read(cx, &mut buf[*pos..])) {
             Ok(0) => {
                 if *pos == 0 {
                     return Poll::Ready(Ok(false));
@@ -746,7 +778,39 @@ fn poll_try_read_all<R: Read + Unpin>(
     Poll::Ready(Ok(true))
 }
 
+#[cfg(feature = "runtime-tokio")]
+fn poll_try_read_all<R: Read + Unpin>(
+    mut source: R,
+    cx: &mut Context<'_>,
+    buf: &mut [u8],
+    pos: &mut usize,
+) -> Poll<io::Result<bool>> {
+    while *pos < buf.len() {
+        let mut read_buf = io::ReadBuf::new(&mut buf[*pos..]);
+        let start = read_buf.filled().len();
+        match ready!(Pin::new(&mut source).poll_read(cx, &mut read_buf)) {
+            Ok(()) => {
+                let diff = read_buf.filled().len() - start;
+                if diff == 0 {
+                    if *pos == 0 {
+                        return Poll::Ready(Ok(false));
+                    }
+
+                    return Poll::Ready(Err(other("failed to read entire block")));
+                } else {
+                    *pos += diff;
+                }
+            }
+            Err(err) => return Poll::Ready(Err(err)),
+        }
+    }
+
+    *pos = 0;
+    Poll::Ready(Ok(true))
+}
+
 /// Skip n bytes on the given source.
+#[cfg(feature = "runtime-async-std")]
 fn poll_skip<R: Read + Unpin>(
     mut source: R,
     cx: &mut Context<'_>,
@@ -755,7 +819,8 @@ fn poll_skip<R: Read + Unpin>(
     let mut buf = [0u8; 4096 * 8];
     while amt > 0 {
         let n = cmp::min(amt, buf.len() as u64);
-        match async_std::task::ready!(Pin::new(&mut source).poll_read(cx, &mut buf[..n as usize])) {
+
+        match futures_util::ready!(Pin::new(&mut source).poll_read(cx, &mut buf[..n as usize])) {
             Ok(0) => {
                 return Poll::Ready(Err(other("unexpected EOF during skip")));
             }
@@ -769,12 +834,40 @@ fn poll_skip<R: Read + Unpin>(
     Poll::Ready(Ok(()))
 }
 
+/// Skip n bytes on the given source.
+#[cfg(feature = "runtime-tokio")]
+fn poll_skip<R: Read + Unpin>(
+    mut source: R,
+    cx: &mut Context<'_>,
+    mut amt: u64,
+) -> Poll<io::Result<()>> {
+    let mut buf = [0u8; 4096 * 8];
+    while amt > 0 {
+        let n = cmp::min(amt, buf.len() as u64);
+        let mut read_buf = io::ReadBuf::new(&mut buf[..n as usize]);
+        let start = read_buf.filled().len();
+        match futures_util::ready!(Pin::new(&mut source).poll_read(cx, &mut read_buf)) {
+            Ok(()) => {
+                let diff = read_buf.filled().len() - start;
+                if n == 0 {
+                    return Poll::Ready(Err(other("unexpected EOF during skip")));
+                } else {
+                    amt -= diff as u64;
+                }
+            }
+            Err(err) => return Poll::Ready(Err(err)),
+        }
+    }
+
+    Poll::Ready(Ok(()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    assert_impl_all!(async_std::fs::File: Send, Sync);
-    assert_impl_all!(Entries<async_std::fs::File>: Send, Sync);
-    assert_impl_all!(Archive<async_std::fs::File>: Send, Sync);
-    assert_impl_all!(Entry<Archive<async_std::fs::File>>: Send, Sync);
+    assert_impl_all!(fs::File: Send, Sync);
+    assert_impl_all!(Entries<fs::File>: Send, Sync);
+    assert_impl_all!(Archive<fs::File>: Send, Sync);
+    assert_impl_all!(Entry<Archive<fs::File>>: Send, Sync);
 }

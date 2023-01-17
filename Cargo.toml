@@ -20,12 +20,16 @@ contents are never required to be entirely resident in memory all at once.
 """
 
 [dependencies]
-async-std = { version = "1.12.0", features = ["unstable"] }
+async-std = { version = "1.12", optional = true }
+tokio = { version = "1", optional = true, features = ["fs", "io-util"] }
 filetime = "0.2.8"
 pin-project = "1.0.8"
+futures-util = { version = "0.3.25", features = [] }
+tokio-stream = { version = "0.1.11", features = ["fs"], optional = true }
 
 [dev-dependencies]
-async-std = { version = "1.12.0", features = ["unstable", "attributes"] }
+async-std = { version = "1.12", features = ["unstable", "attributes"] }
+tokio = { version = "1", features = ["rt", "io-std", "rt-multi-thread", "macros"] }
 static_assertions = "1.1.0"
 tempfile = "3"
 
@@ -37,4 +41,6 @@ xattr = { version = "0.2", optional = true }
 redox_syscall = "0.2"
 
 [features]
-default = [ "xattr" ]
+default = ["xattr", "runtime-tokio"]
+runtime-async-std = ["async-std"]
+runtime-tokio = ["tokio", "tokio-stream"]
