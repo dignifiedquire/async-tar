@@ -6,7 +6,7 @@ use std::{
 };
 
 #[cfg(feature = "runtime-async-std")]
-use async_std::{fs, io, io::prelude::*, path::Path, prelude::*};
+use async_std::{fs, io, io::prelude::*, path::Path};
 use futures_util::{
     ready,
     stream::{Stream, StreamExt},
@@ -293,7 +293,7 @@ macro_rules! ready_opt_err {
 
 macro_rules! ready_err {
     ($val:expr) => {
-        match futures_util::ready!($val) {
+        match ready!($val) {
             Ok(val) => val,
             Err(err) => return Poll::Ready(Some(Err(err))),
         }
@@ -311,13 +311,8 @@ impl<R: Read + Unpin> Stream for Entries<R> {
             let fields = if let Some(fields) = this.fields.as_mut() {
                 fields
             } else {
-                *this.fields = Some(EntryFields::from(ready_opt_err!(poll_next_raw(
-                    this.archive,
-                    next,
-                    current_header,
-                    current_header_pos,
-                    cx
-                ))));
+                let res = poll_next_raw(this.archive, next, current_header, current_header_pos, cx);
+                *this.fields = Some(EntryFields::from(ready_opt_err!(res)));
                 continue;
             };
 
@@ -409,7 +404,7 @@ fn poll_next_raw<R: Read + Unpin>(
         // Seek to the start of the next header in the archive
         if current_header.is_none() {
             let delta = *next - archive.inner.lock().unwrap().pos;
-            match futures_util::ready!(poll_skip(archive.clone(), cx, delta)) {
+            match ready!(poll_skip(archive.clone(), cx, delta)) {
                 Ok(_) => {}
                 Err(err) => return Poll::Ready(Some(Err(err))),
             }
@@ -657,11 +652,11 @@ impl<R: Read + Unpin> Read for Archive<R> {
         let mut inner = Pin::new(&mut *lock);
         let r = Pin::new(&mut inner.obj);
 
-        let start = into.filled().len() as u64;
-        let res = ready!(r.poll_read(cx, into));
-        match res {
+        let start = into.filled().len();
+        match ready!(r.poll_read(cx, into)) {
             Ok(()) => {
-                inner.pos += into.filled().len() as u64 - start;
+                let diff = into.filled().len() - start;
+                inner.pos += diff as u64;
                 Poll::Ready(Ok(()))
             }
             Err(err) => Poll::Ready(Err(err)),
@@ -739,7 +734,7 @@ fn poll_skip<R: Read + Unpin>(
     let mut buf = [0u8; 4096 * 8];
     while amt > 0 {
         let n = cmp::min(amt, buf.len() as u64);
-        match futures_util::ready!(Pin::new(&mut source).poll_read(cx, &mut buf[..n as usize])) {
+        match ready!(Pin::new(&mut source).poll_read(cx, &mut buf[..n as usize])) {
             Ok(n) if n == 0 => {
                 return Poll::Ready(Err(other("unexpected EOF during skip")));
             }
@@ -765,10 +760,10 @@ fn poll_skip<R: Read + Unpin>(
         let n = cmp::min(amt, buf.len() as u64);
         let mut read_buf = io::ReadBuf::new(&mut buf[..n as usize]);
         let start = read_buf.filled().len();
-        match futures_util::ready!(Pin::new(&mut source).poll_read(cx, &mut read_buf)) {
+        match ready!(Pin::new(&mut source).poll_read(cx, &mut read_buf)) {
             Ok(()) => {
                 let diff = read_buf.filled().len() - start;
-                if n == 0 {
+                if diff == 0 {
                     return Poll::Ready(Err(other("unexpected EOF during skip")));
                 } else {
                     amt -= diff as u64;

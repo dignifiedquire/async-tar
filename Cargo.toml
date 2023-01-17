@@ -41,6 +41,6 @@ xattr = { version = "0.2", optional = true }
 redox_syscall = "0.2"
 
 [features]
-default = ["xattr", "runtime-tokio"]
+default = ["xattr", "runtime-async-std"]
 runtime-async-std = ["async-std"]
 runtime-tokio = ["tokio", "tokio-stream"]

@@ -40,6 +40,11 @@
 
 > Based on the great [tar-rs](https://github.com/alexcrichton/tar-rs).
 
+## Features 
+
+- `runtime-async-std`: enabled by default, makes this crate compatible with `async-std`
+- `runtime-tokio`: makes this crate compatible with `tokio`.
+
 ## Reading an archive
 
 ```rust,no_run

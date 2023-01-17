@@ -562,7 +562,7 @@ async fn prepare_header_link(
     link_name: &Path,
 ) -> io::Result<()> {
     // Same as previous function but for linkname
-    if let Err(e) = header.set_link_name(&link_name) {
+    if let Err(e) = header.set_link_name(link_name) {
         let data = path2bytes(link_name)?;
         if data.len() < header.as_old().linkname.len() {
             return Err(e);
@@ -604,7 +604,7 @@ async fn append_dir_all(
 ) -> io::Result<()> {
     let mut stack = vec![(src_path.to_path_buf(), true, false)];
     while let Some((src, is_dir, is_symlink)) = stack.pop() {
-        let dest = path.join(src.strip_prefix(&src_path).unwrap());
+        let dest = path.join(src.strip_prefix(src_path).unwrap());
 
         #[cfg(feature = "runtime-async-std")]
         async fn check_is_dir(path: &Path) -> bool {
