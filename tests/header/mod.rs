@@ -170,7 +170,7 @@ fn set_path() {
 #[test]
 fn set_ustar_path_hard() {
     let mut h = Header::new_ustar();
-    let p = Path::new("a").join(&vec!["a"; 100].join(""));
+    let p = Path::new("a").join(vec!["a"; 100].join(""));
     t!(h.set_path(&p));
     let path = t!(h.path());
     let actual: &Path = path.as_ref().into();
