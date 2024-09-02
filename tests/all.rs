@@ -552,31 +552,46 @@ async fn extracting_malicious_tarball() {
     // The `tmp` subdirectory should be created and within this
     // subdirectory, there should be files named `abs_evil.txt` through
     // `abs_evil6.txt`.
-    assert!(fs::metadata(td.path().join("tmp"))
+    let tmp_root = td.path().join("tmp");
+
+    assert!(fs::metadata(&tmp_root)
         .await
         .map(|m| m.is_dir())
         .unwrap_or(false));
-    assert!(fs::metadata(td.path().join("tmp/abs_evil.txt"))
+
+    let mut entries = fs::read_dir(&tmp_root).await.unwrap();
+    while let Some(entry) = entries.next().await {
+        let entry = entry.unwrap();
+        println!("- {:?}", entry.file_name());
+    }
+
+    assert!(fs::metadata(tmp_root.join("abs_evil.txt"))
         .await
         .map(|m| m.is_file())
         .unwrap_or(false));
-    assert!(fs::metadata(td.path().join("tmp/abs_evil2.txt"))
+
+    // not present due to // being interpreted differently on windows
+    #[cfg(not(target_os = "windows"))]
+    assert!(fs::metadata(tmp_root.join("abs_evil2.txt"))
         .await
         .map(|m| m.is_file())
         .unwrap_or(false));
-    assert!(fs::metadata(td.path().join("tmp/abs_evil3.txt"))
+    assert!(fs::metadata(tmp_root.join("abs_evil3.txt"))
         .await
         .map(|m| m.is_file())
         .unwrap_or(false));
-    assert!(fs::metadata(td.path().join("tmp/abs_evil4.txt"))
+    assert!(fs::metadata(tmp_root.join("abs_evil4.txt"))
         .await
         .map(|m| m.is_file())
         .unwrap_or(false));
-    assert!(fs::metadata(td.path().join("tmp/abs_evil5.txt"))
+
+    // not present due to // being interpreted differently on windows
+    #[cfg(not(target_os = "windows"))]
+    assert!(fs::metadata(tmp_root.join("abs_evil5.txt"))
         .await
         .map(|m| m.is_file())
         .unwrap_or(false));
-    assert!(fs::metadata(td.path().join("tmp/abs_evil6.txt"))
+    assert!(fs::metadata(tmp_root.join("abs_evil6.txt"))
         .await
         .map(|m| m.is_file())
         .unwrap_or(false));
