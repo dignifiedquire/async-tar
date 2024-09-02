@@ -677,7 +677,7 @@ fn poll_skip<R: Read + Unpin>(
     while amt > 0 {
         let n = cmp::min(amt, buf.len() as u64);
         match async_std::task::ready!(Pin::new(&mut source).poll_read(cx, &mut buf[..n as usize])) {
-            Ok(n) if n == 0 => {
+            Ok(0) => {
                 return Poll::Ready(Err(other("unexpected EOF during skip")));
             }
             Ok(n) => {

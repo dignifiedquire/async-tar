@@ -446,14 +446,12 @@ impl Header {
     ///
     /// May return an error if the field is corrupted.
     pub fn uid(&self) -> io::Result<u64> {
-        num_field_wrapper_from(&self.as_old().uid)
-            .map(|u| u as u64)
-            .map_err(|err| {
-                io::Error::new(
-                    err.kind(),
-                    format!("{} when getting uid for {}", err, self.path_lossy()),
-                )
-            })
+        num_field_wrapper_from(&self.as_old().uid).map_err(|err| {
+            io::Error::new(
+                err.kind(),
+                format!("{} when getting uid for {}", err, self.path_lossy()),
+            )
+        })
     }
 
     /// Encodes the `uid` provided into this header.
@@ -463,14 +461,12 @@ impl Header {
 
     /// Returns the value of the group's user ID field
     pub fn gid(&self) -> io::Result<u64> {
-        num_field_wrapper_from(&self.as_old().gid)
-            .map(|u| u as u64)
-            .map_err(|err| {
-                io::Error::new(
-                    err.kind(),
-                    format!("{} when getting gid for {}", err, self.path_lossy()),
-                )
-            })
+        num_field_wrapper_from(&self.as_old().gid).map_err(|err| {
+            io::Error::new(
+                err.kind(),
+                format!("{} when getting gid for {}", err, self.path_lossy()),
+            )
+        })
     }
 
     /// Encodes the `gid` provided into this header.
@@ -721,7 +717,7 @@ impl Header {
                 self.set_mtime(meta.mtime() as u64);
                 self.set_uid(meta.uid() as u64);
                 self.set_gid(meta.gid() as u64);
-                self.set_mode(meta.mode() as u32);
+                self.set_mode(meta.mode());
             }
             HeaderMode::Deterministic => {
                 self.set_mtime(0);
@@ -1502,7 +1498,7 @@ fn copy_path_into(mut slot: &mut [u8], path: &Path, is_link_name: bool) -> io::R
                 return Err(other("path component in archive cannot contain `/`"));
             }
         }
-        copy(&mut slot, &*bytes)?;
+        copy(&mut slot, &bytes)?;
         if &*bytes != b"/" {
             needs_slash = true;
         }
@@ -1517,7 +1513,7 @@ fn copy_path_into(mut slot: &mut [u8], path: &Path, is_link_name: bool) -> io::R
     return Ok(());
 
     fn copy(slot: &mut &mut [u8], bytes: &[u8]) -> io::Result<()> {
-        copy_into(*slot, bytes)?;
+        copy_into(slot, bytes)?;
         let tmp = std::mem::take(slot);
         *slot = &mut tmp[bytes.len()..];
         Ok(())
@@ -1565,7 +1561,7 @@ pub fn path2bytes(p: &Path) -> io::Result<Cow<[u8]>> {
 #[cfg(any(unix, target_os = "redox"))]
 /// On unix this will never fail
 pub fn path2bytes(p: &Path) -> io::Result<Cow<[u8]>> {
-    Ok(p.as_os_str().as_bytes()).map(Cow::Borrowed)
+    Ok(Cow::Borrowed(p.as_os_str().as_bytes()))
 }
 
 #[cfg(windows)]
