@@ -538,7 +538,7 @@ async fn prepare_header_path(
         // Truncate the path to store in the header we're about to emit to
         // ensure we've got something at least mentioned.
         let path = bytes2path(Cow::Borrowed(&data[..max]))?;
-        header.set_path(&path)?;
+        header.set_truncated_path_for_gnu_header(&path)?;
     }
     Ok(())
 }

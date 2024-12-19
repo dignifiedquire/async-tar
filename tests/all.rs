@@ -229,22 +229,19 @@ async fn large_filename_with_dot_dot_at_100_byte_mark() {
     let mut long_name_with_dot_dot  = "tdir/".repeat(19);
     long_name_with_dot_dot.push_str("tt/..file");
 
-    // The following fails with:
-    // "returned paths in archives must not have `..` when setting path for tdir/tdir/tdir/tdir/tdir/tdir/tdir/tdir/tdir/tdir/tdir/tdir/tdir/tdir/tdir/tdir/tdir/tdir/tdir/tt"
-    assert!(ar.append_data(&mut header, &long_name_with_dot_dot, &b"test"[..]).await.is_err());
+    t!(ar.append_data(&mut header, &long_name_with_dot_dot, &b"test"[..]).await);
 
-    // Once the tests passes the following should be uncommented.
-    // let rd = Cursor::new(t!(ar.into_inner().await));
-    // let ar = Archive::new(rd);
-    // let mut entries = t!(ar.entries());
+    let rd = Cursor::new(t!(ar.into_inner().await));
+    let ar = Archive::new(rd);
+    let mut entries = t!(ar.entries());
 
-    // let mut f = entries.next().await.unwrap().unwrap();
-    // assert_eq!(&*f.path_bytes(), long_name_with_dot_dot.as_bytes());
-    // assert_eq!(f.header().size().unwrap(), 4);
-    // let mut s = String::new();
-    // t!(f.read_to_string(&mut s).await);
-    // assert_eq!(s, "test");
-    // assert!(entries.next().await.is_none());
+    let mut f = entries.next().await.unwrap().unwrap();
+    assert_eq!(&*f.path_bytes(), long_name_with_dot_dot.as_bytes());
+    assert_eq!(f.header().size().unwrap(), 4);
+    let mut s = String::new();
+    t!(f.read_to_string(&mut s).await);
+    assert_eq!(s, "test");
+    assert!(entries.next().await.is_none());
 }
 
 #[async_std::test]
