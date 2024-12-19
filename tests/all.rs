@@ -226,10 +226,12 @@ async fn large_filename_with_dot_dot_at_100_byte_mark() {
     header.set_mode(0o644);
     header.set_size(4);
 
-    let mut long_name_with_dot_dot  = "tdir/".repeat(19);
+    let mut long_name_with_dot_dot = "tdir/".repeat(19);
     long_name_with_dot_dot.push_str("tt/..file");
 
-    t!(ar.append_data(&mut header, &long_name_with_dot_dot, &b"test"[..]).await);
+    t!(ar
+        .append_data(&mut header, &long_name_with_dot_dot, &b"test"[..])
+        .await);
 
     let rd = Cursor::new(t!(ar.into_inner().await));
     let ar = Archive::new(rd);

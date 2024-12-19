@@ -1480,7 +1480,12 @@ fn copy_into(slot: &mut [u8], bytes: &[u8]) -> io::Result<()> {
     }
 }
 
-fn copy_path_into_inner(mut slot: &mut [u8], path: &Path, is_link_name: bool,    is_truncated_gnu_long_path: bool) -> io::Result<()> {
+fn copy_path_into_inner(
+    mut slot: &mut [u8],
+    path: &Path,
+    is_link_name: bool,
+    is_truncated_gnu_long_path: bool,
+) -> io::Result<()> {
     let mut emitted = false;
     let mut needs_slash = false;
     let mut iter = path.components().peekable();
@@ -1495,8 +1500,7 @@ fn copy_path_into_inner(mut slot: &mut [u8], path: &Path, is_link_name: bool,   
                     // If it's last component of a gnu long path we know that there might be more
                     // to the component than .. (the rest is stored elsewhere)
                     {}
-                }
-                else {
+                } else {
                     return Err(other("paths in archives must not have `..`"));
                 }
             }
