@@ -1,6 +1,8 @@
 use std::{
     borrow::Cow,
-    cmp, fmt, marker,
+    cmp, fmt,
+    io::{Cursor, Write},
+    marker,
     pin::Pin,
     task::{Context, Poll},
 };
@@ -337,15 +339,22 @@ impl<R: Read + Unpin> EntryFields<R> {
     pub(crate) fn poll_read_all(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<io::Result<Vec<u8>>> {
+        out: &mut Cursor<Vec<u8>>,
+    ) -> Poll<io::Result<()>> {
         // Preallocate some data but don't let ourselves get too crazy now.
         let cap = cmp::min(self.size, 128 * 1024);
         let mut buf = Vec::with_capacity(cap as usize);
 
         // Copied from futures::ReadToEnd
-        match async_std::task::ready!(poll_read_all_internal(self, cx, &mut buf)) {
-            Ok(_) => Poll::Ready(Ok(buf)),
-            Err(err) => Poll::Ready(Err(err)),
+        match poll_read_all_internal(self, cx, &mut buf) {
+            Poll::Ready(t) => {
+                out.write_all(&buf)?;
+                Poll::Ready(t.map(|_| ()))
+            }
+            Poll::Pending => {
+                out.write_all(&buf)?;
+                Poll::Pending
+            }
         }
     }
 
