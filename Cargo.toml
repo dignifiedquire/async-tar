@@ -31,7 +31,7 @@ tempfile = "3"
 
 [target."cfg(unix)".dependencies]
 libc = "0.2"
-xattr = { version = "0.2", optional = true }
+xattr = { version = "1.5", optional = true }
 
 [target.'cfg(target_os = "redox")'.dependencies]
 redox_syscall = "0.2"
