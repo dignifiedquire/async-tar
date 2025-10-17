@@ -15,9 +15,11 @@ use async_std::{
 use pin_project::pin_project;
 
 use crate::{
+    Entry, GnuExtSparseHeader, GnuSparseHeader, Header,
     entry::{EntryFields, EntryIo},
     error::TarError,
-    other, Entry, GnuExtSparseHeader, GnuSparseHeader, Header,
+    other,
+    pax::pax_extensions,
 };
 
 /// A top-level representation of an archive file.
@@ -171,7 +173,7 @@ impl<R: Read + Unpin> Archive<R> {
 
         Ok(Entries {
             archive: self,
-            current: (0, None, 0, None),
+            current: State::default(),
             fields: None,
             gnu_longlink: None,
             gnu_longname: None,
@@ -263,12 +265,21 @@ impl<R: Read + Unpin> Archive<R> {
     }
 }
 
+#[derive(Debug, Default)]
+struct State {
+    next: u64,
+    current_header: Option<Header>,
+    current_header_pos: usize,
+    current_ext: Option<GnuExtSparseHeader>,
+    pax_extensions: Option<Vec<u8>>,
+}
+
 /// Stream of `Entry`s.
 #[pin_project]
 #[derive(Debug)]
 pub struct Entries<R: Read + Unpin> {
     archive: Archive<R>,
-    current: (u64, Option<Header>, usize, Option<GnuExtSparseHeader>),
+    current: State,
     fields: Option<EntryFields<Archive<R>>>,
     gnu_longname: Option<Vec<u8>>,
     gnu_longlink: Option<Vec<u8>>,
@@ -300,7 +311,13 @@ impl<R: Read + Unpin> Stream for Entries<R> {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
         loop {
-            let (next, current_header, current_header_pos, _) = &mut this.current;
+            let State {
+                next,
+                current_header,
+                current_header_pos,
+                pax_extensions,
+                ..
+            } = &mut this.current;
 
             let fields = if let Some(fields) = this.fields.as_mut() {
                 fields
@@ -310,6 +327,7 @@ impl<R: Read + Unpin> Stream for Entries<R> {
                     next,
                     current_header,
                     current_header_pos,
+                    pax_extensions.as_deref(),
                     cx
                 ))));
                 continue;
@@ -350,6 +368,7 @@ impl<R: Read + Unpin> Stream for Entries<R> {
                     ))));
                 }
                 *this.pax_extensions = Some(ready_err!(Pin::new(fields).poll_read_all(cx)));
+                this.current.pax_extensions = this.pax_extensions.clone();
                 *this.fields = None;
                 continue;
             }
@@ -358,12 +377,17 @@ impl<R: Read + Unpin> Stream for Entries<R> {
             fields.long_linkname = this.gnu_longlink.take();
             fields.pax_extensions = this.pax_extensions.take();
 
-            let (next, _, current_pos, current_ext) = &mut this.current;
+            let State {
+                next,
+                current_header_pos,
+                current_ext,
+                ..
+            } = &mut this.current;
             ready_err!(poll_parse_sparse_header(
                 this.archive,
                 next,
                 current_ext,
-                current_pos,
+                current_header_pos,
                 fields,
                 cx
             ));
@@ -385,7 +409,7 @@ impl<R: Read + Unpin> Stream for RawEntries<R> {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let archive = self.archive.clone();
         let (next, current_header, current_header_pos) = &mut self.current;
-        poll_next_raw(&archive, next, current_header, current_header_pos, cx)
+        poll_next_raw(&archive, next, current_header, current_header_pos, None, cx)
     }
 }
 
@@ -394,6 +418,7 @@ fn poll_next_raw<R: Read + Unpin>(
     next: &mut u64,
     current_header: &mut Option<Header>,
     current_header_pos: &mut usize,
+    pax_extensions_data: Option<&[u8]>,
     cx: &mut Context<'_>,
 ) -> Poll<Option<io::Result<Entry<Archive<R>>>>> {
     let mut header_pos = *next;
@@ -456,11 +481,65 @@ fn poll_next_raw<R: Read + Unpin>(
     }
 
     let file_pos = *next;
-    let size = header.entry_size()?;
+
+    let mut header = current_header.take().unwrap();
+
+    // when pax extensions are available, the size should come from there.
+    let mut size = header.entry_size()?;
+
+    // the size above will be overriden by the pax data if it has a size field.
+    // same for uid and gid, which will be overridden in the header itself.
+    if let Some(pax_extensions_data) = pax_extensions_data {
+        let pax = pax_extensions(pax_extensions_data);
+        for extension in pax {
+            let extension = extension.map_err(|_e| other("pax extensions invalid"))?;
+
+            // ignore keys that aren't parsable as a string at this stage.
+            // that isn't relevant to the size/uid/gid processing.
+            let Some(key) = extension.key().ok() else {
+                continue;
+            };
+
+            match key {
+                "size" => {
+                    let size_str = extension
+                        .value()
+                        .map_err(|_e| other("failed to parse pax size as string"))?;
+                    size = size_str
+                        .parse::<u64>()
+                        .map_err(|_e| other("failed to parse pax size"))?;
+                }
+
+                "uid" => {
+                    let uid_str = extension
+                        .value()
+                        .map_err(|_e| other("failed to parse pax uid as string"))?;
+                    header.set_uid(
+                        uid_str
+                            .parse::<u64>()
+                            .map_err(|_e| other("failed to parse pax uid"))?,
+                    );
+                }
+
+                "gid" => {
+                    let gid_str = extension
+                        .value()
+                        .map_err(|_e| other("failed to parse pax gid as string"))?;
+                    header.set_gid(
+                        gid_str
+                            .parse::<u64>()
+                            .map_err(|_e| other("failed to parse pax gid"))?,
+                    );
+                }
+
+                _ => {
+                    continue;
+                }
+            }
+        }
+    }
 
     let data = EntryIo::Data(archive.clone().take(size));
-
-    let header = current_header.take().unwrap();
 
     let ArchiveInner {
         unpack_xattrs,
