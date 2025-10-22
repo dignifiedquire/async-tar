@@ -1084,7 +1084,9 @@ async fn path_separators() {
     assert_eq!(t!(entry.path()), long_path);
     assert!(!entry.path_bytes().contains(&b'\\'));
 
-    assert!(entries.next().await.is_none());
+    let entry = entries.next().await;
+    dbg!(&entry);
+    assert!(entry.is_none());
 }
 
 #[cfg_attr(feature = "runtime-async-std", async_std::test)]

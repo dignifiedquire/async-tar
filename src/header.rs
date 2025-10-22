@@ -23,7 +23,7 @@ use tokio::fs;
 #[cfg(feature = "runtime-tokio")]
 use tokio::io;
 
-use crate::{EntryType, other};
+use crate::{other, EntryType};
 
 /// Representation of the header of an entry in an archive
 #[repr(C)]
