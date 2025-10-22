@@ -232,8 +232,8 @@ impl<R: Read + Unpin> Entry<R> {
     ///
     /// # Examples
     ///
-    /// ```no_run
-    /// # #[cfg(feature = "runtime-async-std")]
+    #[cfg_attr(feature = "runtime-async-std", doc = "```no_run")]
+    #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
     /// #
     /// use async_std::fs::File;
@@ -268,8 +268,8 @@ impl<R: Read + Unpin> Entry<R> {
     ///
     /// # Examples
     ///
-    /// ```no_run
-    /// # #[cfg(feature = "runtime-async-std")]
+    #[cfg_attr(feature = "runtime-async-std", doc = "```no_run")]
+    #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
     /// #
     /// use async_std::fs::File;

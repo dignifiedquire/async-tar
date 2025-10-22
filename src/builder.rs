@@ -112,7 +112,8 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     ///
     /// # Examples
     ///
-    /// ```
+    #[cfg_attr(feature = "runtime-async-std", doc = "```")]
+    #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
     /// #
     /// use async_tar::{Builder, Header};
@@ -294,7 +295,8 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    #[cfg_attr(feature = "runtime-async-std", doc = "```no_run")]
+    #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
     /// #
     /// use async_std::fs::File;
@@ -334,7 +336,8 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     ///
     /// # Examples
     ///
-    /// ```
+    #[cfg_attr(feature = "runtime-async-std", doc = "```")]
+    #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
     /// #
     /// use async_std::fs;
@@ -370,8 +373,8 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     ///
     /// # Examples
     ///
-    /// ```
-    /// #[cfg(feature = "runtime-async-std")]
+    #[cfg_attr(feature = "runtime-async-std", doc = "```")]
+    #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
     /// #
     /// use async_std::fs;
