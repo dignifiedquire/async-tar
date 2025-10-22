@@ -5,6 +5,8 @@ use std::os::windows::prelude::*;
 
 use std::{borrow::Cow, fmt, iter, iter::repeat, mem, str};
 
+#[cfg(all(windows, feature = "runtime-async-std"))]
+use async_std::fs;
 #[cfg(feature = "runtime-async-std")]
 use async_std::{
     fs::Metadata,
@@ -16,10 +18,12 @@ use std::{
     fs::Metadata,
     path::{Component, Path, PathBuf},
 };
+#[cfg(all(windows, feature = "runtime-tokio"))]
+use tokio::fs;
 #[cfg(feature = "runtime-tokio")]
 use tokio::io;
 
-use crate::{other, EntryType};
+use crate::{EntryType, other};
 
 /// Representation of the header of an entry in an archive
 #[repr(C)]
