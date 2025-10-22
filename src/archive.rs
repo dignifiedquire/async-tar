@@ -24,12 +24,11 @@ use tokio::{
 use tokio_stream::{Stream, StreamExt};
 
 use crate::{
-    Entry, GnuExtSparseHeader, GnuSparseHeader, Header,
     entry::{EntryFields, EntryIo},
     error::TarError,
     fs_canonicalize, other,
     pax::pax_extensions,
-    symlink_metadata,
+    symlink_metadata, Entry, GnuExtSparseHeader, GnuSparseHeader, Header,
 };
 
 /// A top-level representation of an archive file.
@@ -322,7 +321,7 @@ impl<R: Read + Unpin> Stream for Entries<R> {
                 fields,
                 gnu_longname,
                 gnu_longlink,
-                pax_extensions,
+
                 archive,
                 ..
             } = &mut *self;

@@ -1479,7 +1479,7 @@ fn truncate(slice: &[u8]) -> &[u8] {
 fn copy_into(slot: &mut [u8], bytes: &[u8]) -> io::Result<()> {
     if bytes.len() > slot.len() {
         Err(other("provided value is too long"))
-    } else if bytes.iter().any(|b| *b == 0) {
+    } else if bytes.contains(&0) {
         Err(other("provided value contains a nul byte"))
     } else {
         for (slot, val) in slot.iter_mut().zip(bytes.iter().chain(Some(&0))) {
@@ -1536,7 +1536,7 @@ fn copy_path_into_inner(
         return Err(other("paths in archives must have at least one component"));
     }
     if ends_with_slash(path) {
-        copy(&mut slot, &[b'/'])?;
+        copy(&mut slot, b"/")?;
     }
     return Ok(());
 
@@ -1587,7 +1587,7 @@ fn ends_with_slash(p: &Path) -> bool {
 
 #[cfg(any(unix, target_os = "redox"))]
 fn ends_with_slash(p: &Path) -> bool {
-    p.as_os_str().as_bytes().ends_with(&[b'/'])
+    p.as_os_str().as_bytes().ends_with(b"/")
 }
 
 #[cfg(any(windows, target_arch = "wasm32"))]
