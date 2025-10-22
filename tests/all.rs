@@ -848,7 +848,7 @@ async fn pax_path() {
 #[cfg_attr(feature = "runtime-async-std", async_std::test)]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn pax_precedence() {
-    let mut ar = Archive::new(tar!("pax-header-precedence.tar"));
+    let ar = Archive::new(tar!("pax-header-precedence.tar"));
     let mut entries = t!(ar.entries());
 
     let first = t!(entries.next().await.unwrap());

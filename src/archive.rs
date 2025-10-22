@@ -322,15 +322,15 @@ impl<R: Read + Unpin> Stream for Entries<R> {
                 fields,
                 gnu_longname,
                 gnu_longlink,
-
                 archive,
+                pax_extensions,
                 ..
             } = &mut *self;
             let State {
                 next,
                 current_header,
                 current_header_pos,
-                pax_extensions,
+                pax_extensions: current_pax_extensions,
                 ..
             } = current;
 
@@ -342,7 +342,7 @@ impl<R: Read + Unpin> Stream for Entries<R> {
                     next,
                     current_header,
                     current_header_pos,
-                    pax_extensions.as_deref(),
+                    current_pax_extensions.as_deref(),
                     cx
                 ))));
                 continue;
@@ -383,7 +383,7 @@ impl<R: Read + Unpin> Stream for Entries<R> {
                     ))));
                 }
                 *pax_extensions = Some(ready_err!(Pin::new(new_fields).poll_read_all(cx)));
-                current.pax_extensions = pax_extensions.clone();
+                *current_pax_extensions = pax_extensions.clone();
                 *fields = None;
                 continue;
             }
@@ -407,7 +407,7 @@ impl<R: Read + Unpin> Stream for Entries<R> {
                 cx
             ));
 
-            return Poll::Ready(Some(Ok(self.fields.take().unwrap().into_entry())));
+            return Poll::Ready(Some(Ok(fields.take().unwrap().into_entry())));
         }
     }
 }
