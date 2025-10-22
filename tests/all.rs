@@ -272,18 +272,24 @@ async fn check_dirtree(td: &TempDir) {
     let dir_a = td.path().join("a");
     let dir_b = td.path().join("a/b");
     let file_c = td.path().join("a/c");
-    assert!(fs::metadata(&dir_a)
-        .await
-        .map(|m| m.is_dir())
-        .unwrap_or(false));
-    assert!(fs::metadata(&dir_b)
-        .await
-        .map(|m| m.is_dir())
-        .unwrap_or(false));
-    assert!(fs::metadata(&file_c)
-        .await
-        .map(|m| m.is_file())
-        .unwrap_or(false));
+    assert!(
+        fs::metadata(&dir_a)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false)
+    );
+    assert!(
+        fs::metadata(&dir_b)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false)
+    );
+    assert!(
+        fs::metadata(&file_c)
+            .await
+            .map(|m| m.is_file())
+            .unwrap_or(false)
+    );
 }
 
 #[async_std::test]
@@ -373,25 +379,33 @@ async fn writing_directories_recursively() {
     let ar = Archive::new(Cursor::new(data));
     t!(ar.unpack(td.path()).await);
     let base_dir = td.path().join("foobar");
-    assert!(fs::metadata(&base_dir)
-        .await
-        .map(|m| m.is_dir())
-        .unwrap_or(false));
+    assert!(
+        fs::metadata(&base_dir)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false)
+    );
     let file1_path = base_dir.join("file1");
-    assert!(fs::metadata(&file1_path)
-        .await
-        .map(|m| m.is_file())
-        .unwrap_or(false));
+    assert!(
+        fs::metadata(&file1_path)
+            .await
+            .map(|m| m.is_file())
+            .unwrap_or(false)
+    );
     let sub_dir = base_dir.join("sub");
-    assert!(fs::metadata(&sub_dir)
-        .await
-        .map(|m| m.is_dir())
-        .unwrap_or(false));
+    assert!(
+        fs::metadata(&sub_dir)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false)
+    );
     let file2_path = sub_dir.join("file2");
-    assert!(fs::metadata(&file2_path)
-        .await
-        .map(|m| m.is_file())
-        .unwrap_or(false));
+    assert!(
+        fs::metadata(&file2_path)
+            .await
+            .map(|m| m.is_file())
+            .unwrap_or(false)
+    );
 }
 
 #[async_std::test]
@@ -416,25 +430,33 @@ async fn append_dir_all_blank_dest() {
     let ar = Archive::new(Cursor::new(data));
     t!(ar.unpack(td.path()).await);
     let base_dir = td.path();
-    assert!(fs::metadata(&base_dir)
-        .await
-        .map(|m| m.is_dir())
-        .unwrap_or(false));
+    assert!(
+        fs::metadata(&base_dir)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false)
+    );
     let file1_path = base_dir.join("file1");
-    assert!(fs::metadata(&file1_path)
-        .await
-        .map(|m| m.is_file())
-        .unwrap_or(false));
+    assert!(
+        fs::metadata(&file1_path)
+            .await
+            .map(|m| m.is_file())
+            .unwrap_or(false)
+    );
     let sub_dir = base_dir.join("sub");
-    assert!(fs::metadata(&sub_dir)
-        .await
-        .map(|m| m.is_dir())
-        .unwrap_or(false));
+    assert!(
+        fs::metadata(&sub_dir)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false)
+    );
     let file2_path = sub_dir.join("file2");
-    assert!(fs::metadata(&file2_path)
-        .await
-        .map(|m| m.is_file())
-        .unwrap_or(false));
+    assert!(
+        fs::metadata(&file2_path)
+            .await
+            .map(|m| m.is_file())
+            .unwrap_or(false)
+    );
 }
 
 #[async_std::test]
@@ -456,10 +478,12 @@ async fn extracting_duplicate_dirs() {
     t!(ar.unpack(td.path()).await);
 
     let some_dir = td.path().join("some_dir");
-    assert!(fs::metadata(&some_dir)
-        .await
-        .map(|m| m.is_dir())
-        .unwrap_or(false));
+    assert!(
+        fs::metadata(&some_dir)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false)
+    );
 }
 
 #[async_std::test]
@@ -565,18 +589,26 @@ async fn extracting_malicious_tarball() {
     assert!(fs::metadata("/tmp/abs_evil.txt6").await.is_err());
     assert!(fs::metadata("/tmp/rel_evil.txt").await.is_err());
     assert!(fs::metadata("/tmp/rel_evil.txt").await.is_err());
-    assert!(fs::metadata(td.path().join("../tmp/rel_evil.txt"))
-        .await
-        .is_err());
-    assert!(fs::metadata(td.path().join("../rel_evil2.txt"))
-        .await
-        .is_err());
-    assert!(fs::metadata(td.path().join("../rel_evil3.txt"))
-        .await
-        .is_err());
-    assert!(fs::metadata(td.path().join("../rel_evil4.txt"))
-        .await
-        .is_err());
+    assert!(
+        fs::metadata(td.path().join("../tmp/rel_evil.txt"))
+            .await
+            .is_err()
+    );
+    assert!(
+        fs::metadata(td.path().join("../rel_evil2.txt"))
+            .await
+            .is_err()
+    );
+    assert!(
+        fs::metadata(td.path().join("../rel_evil3.txt"))
+            .await
+            .is_err()
+    );
+    assert!(
+        fs::metadata(td.path().join("../rel_evil4.txt"))
+            .await
+            .is_err()
+    );
 
     // The `some` subdirectory should not be created because the only
     // filename that references this has '..'.
@@ -587,10 +619,12 @@ async fn extracting_malicious_tarball() {
     // `abs_evil6.txt`.
     let tmp_root = td.path().join("tmp");
 
-    assert!(fs::metadata(&tmp_root)
-        .await
-        .map(|m| m.is_dir())
-        .unwrap_or(false));
+    assert!(
+        fs::metadata(&tmp_root)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false)
+    );
 
     let mut entries = fs::read_dir(&tmp_root).await.unwrap();
     while let Some(entry) = entries.next().await {
@@ -598,36 +632,48 @@ async fn extracting_malicious_tarball() {
         println!("- {:?}", entry.file_name());
     }
 
-    assert!(fs::metadata(tmp_root.join("abs_evil.txt"))
-        .await
-        .map(|m| m.is_file())
-        .unwrap_or(false));
+    assert!(
+        fs::metadata(tmp_root.join("abs_evil.txt"))
+            .await
+            .map(|m| m.is_file())
+            .unwrap_or(false)
+    );
 
     // not present due to // being interpreted differently on windows
     #[cfg(not(target_os = "windows"))]
-    assert!(fs::metadata(tmp_root.join("abs_evil2.txt"))
-        .await
-        .map(|m| m.is_file())
-        .unwrap_or(false));
-    assert!(fs::metadata(tmp_root.join("abs_evil3.txt"))
-        .await
-        .map(|m| m.is_file())
-        .unwrap_or(false));
-    assert!(fs::metadata(tmp_root.join("abs_evil4.txt"))
-        .await
-        .map(|m| m.is_file())
-        .unwrap_or(false));
+    assert!(
+        fs::metadata(tmp_root.join("abs_evil2.txt"))
+            .await
+            .map(|m| m.is_file())
+            .unwrap_or(false)
+    );
+    assert!(
+        fs::metadata(tmp_root.join("abs_evil3.txt"))
+            .await
+            .map(|m| m.is_file())
+            .unwrap_or(false)
+    );
+    assert!(
+        fs::metadata(tmp_root.join("abs_evil4.txt"))
+            .await
+            .map(|m| m.is_file())
+            .unwrap_or(false)
+    );
 
     // not present due to // being interpreted differently on windows
     #[cfg(not(target_os = "windows"))]
-    assert!(fs::metadata(tmp_root.join("abs_evil5.txt"))
-        .await
-        .map(|m| m.is_file())
-        .unwrap_or(false));
-    assert!(fs::metadata(tmp_root.join("abs_evil6.txt"))
-        .await
-        .map(|m| m.is_file())
-        .unwrap_or(false));
+    assert!(
+        fs::metadata(tmp_root.join("abs_evil5.txt"))
+            .await
+            .map(|m| m.is_file())
+            .unwrap_or(false)
+    );
+    assert!(
+        fs::metadata(tmp_root.join("abs_evil6.txt"))
+            .await
+            .map(|m| m.is_file())
+            .unwrap_or(false)
+    );
 }
 
 #[async_std::test]
@@ -797,6 +843,23 @@ async fn pax_path() {
 
     let first = t!(entries.next().await.unwrap());
     assert!(first.path().unwrap().ends_with("aaaaaaaaaaaaaaa"));
+}
+
+#[async_std::test]
+async fn pax_precedence() {
+    let mut ar = Archive::new(tar!("pax-header-precedence.tar"));
+    let mut entries = t!(ar.entries());
+
+    let first = t!(entries.next().await.unwrap());
+    assert!(first.path().unwrap().ends_with("normal.txt"));
+
+    let second = t!(entries.next().await.unwrap());
+    assert!(second.path().unwrap().ends_with("blob.bin"));
+
+    let third = t!(entries.next().await.unwrap());
+    assert!(third.path().unwrap().ends_with("marker.txt"));
+
+    assert!(entries.next().await.is_none());
 }
 
 #[async_std::test]
