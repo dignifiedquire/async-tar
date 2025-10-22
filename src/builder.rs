@@ -371,6 +371,7 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// # Examples
     ///
     /// ```
+    /// #[cfg(feature = "runtime-async-std")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
     /// #
     /// use async_std::fs;
@@ -382,7 +383,7 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// // with a different name.
     /// ar.append_dir_all("bardir", ".").await?;
     /// #
-    /// # Ok(()) }) }
+    /// # Ok(()) })}
     /// ```
     pub async fn append_dir_all<P, Q>(&mut self, path: P, src_path: Q) -> io::Result<()>
     where

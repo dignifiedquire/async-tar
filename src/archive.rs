@@ -1,3 +1,5 @@
+#[cfg(feature = "runtime-tokio")]
+use std::path::Path;
 use std::{
     cmp,
     pin::Pin,
@@ -13,8 +15,6 @@ use async_std::{
     stream::{Stream, StreamExt},
 };
 use futures_core::ready;
-#[cfg(feature = "runtime-tokio")]
-use std::path::Path;
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
     fs,
@@ -221,6 +221,7 @@ impl<R: Read + Unpin> Archive<R> {
     /// # Examples
     ///
     /// ```no_run
+    /// # #[cfg(feature = "runtime-async-std")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
     /// #
     /// use async_std::fs::File;

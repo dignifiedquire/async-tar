@@ -125,7 +125,7 @@ impl<R: Read + Unpin> Entry<R> {
     ///
     /// It is recommended to use this method instead of inspecting the `header`
     /// directly to ensure that various archive formats are handled correctly.
-    pub fn path(&self) -> io::Result<Cow<Path>> {
+    pub fn path(&self) -> io::Result<Cow<'_, Path>> {
         self.fields.path()
     }
 
@@ -135,7 +135,7 @@ impl<R: Read + Unpin> Entry<R> {
     /// separators, and it will not always return the same value as
     /// `self.header().path_bytes()` as some archive formats have support for
     /// longer path names described in separate entries.
-    pub fn path_bytes(&self) -> Cow<[u8]> {
+    pub fn path_bytes(&self) -> Cow<'_, [u8]> {
         self.fields.path_bytes()
     }
 
@@ -152,7 +152,7 @@ impl<R: Read + Unpin> Entry<R> {
     ///
     /// It is recommended to use this method instead of inspecting the `header`
     /// directly to ensure that various archive formats are handled correctly.
-    pub fn link_name(&self) -> io::Result<Option<Cow<Path>>> {
+    pub fn link_name(&self) -> io::Result<Option<Cow<'_, Path>>> {
         self.fields.link_name()
     }
 
@@ -161,7 +161,7 @@ impl<R: Read + Unpin> Entry<R> {
     /// Note that this will not always return the same value as
     /// `self.header().link_name_bytes()` as some archive formats have support for
     /// longer path names described in separate entries.
-    pub fn link_name_bytes(&self) -> Option<Cow<[u8]>> {
+    pub fn link_name_bytes(&self) -> Option<Cow<'_, [u8]>> {
         self.fields.link_name_bytes()
     }
 
@@ -233,6 +233,7 @@ impl<R: Read + Unpin> Entry<R> {
     /// # Examples
     ///
     /// ```no_run
+    /// # #[cfg(feature = "runtime-async-std")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
     /// #
     /// use async_std::fs::File;
@@ -268,6 +269,7 @@ impl<R: Read + Unpin> Entry<R> {
     /// # Examples
     ///
     /// ```no_run
+    /// # #[cfg(feature = "runtime-async-std")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
     /// #
     /// use async_std::fs::File;
@@ -378,7 +380,7 @@ impl<R: Read + Unpin> EntryFields<R> {
         bytes2path(self.path_bytes())
     }
 
-    fn path_bytes(&self) -> Cow<[u8]> {
+    fn path_bytes(&self) -> Cow<'_, [u8]> {
         if let Some(ref bytes) = self.long_pathname {
             if let Some(&0) = bytes.last() {
                 Cow::Borrowed(&bytes[..bytes.len() - 1])
@@ -404,14 +406,14 @@ impl<R: Read + Unpin> EntryFields<R> {
         String::from_utf8_lossy(&self.path_bytes()).to_string()
     }
 
-    fn link_name(&self) -> io::Result<Option<Cow<Path>>> {
+    fn link_name(&self) -> io::Result<Option<Cow<'_, Path>>> {
         match self.link_name_bytes() {
             Some(bytes) => bytes2path(bytes).map(Some),
             None => Ok(None),
         }
     }
 
-    fn link_name_bytes(&self) -> Option<Cow<[u8]>> {
+    fn link_name_bytes(&self) -> Option<Cow<'_, [u8]>> {
         match self.long_linkname {
             Some(ref bytes) => {
                 if let Some(&0) = bytes.last() {
