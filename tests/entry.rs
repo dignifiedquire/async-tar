@@ -1,10 +1,16 @@
-extern crate async_tar;
-extern crate tempfile;
-
+#[cfg(feature = "runtime-async-std")]
 use async_std::{
-    fs::{create_dir, File},
+    fs::{self, create_dir, File},
     prelude::*,
 };
+
+#[cfg(feature = "runtime-tokio")]
+use tokio::{
+    fs::{self, create_dir, File},
+    io::AsyncReadExt,
+};
+#[cfg(feature = "runtime-tokio")]
+use tokio_stream::StreamExt;
 
 use tempfile::Builder;
 
@@ -17,7 +23,8 @@ macro_rules! t {
     };
 }
 
-#[async_std::test]
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn absolute_symlink() {
     let mut ar = async_tar::Builder::new(Vec::new());
 
@@ -35,7 +42,7 @@ async fn absolute_symlink() {
     let td = t!(Builder::new().prefix("tar").tempdir());
     t!(ar.unpack(td.path()).await);
 
-    t!(td.path().join("foo").symlink_metadata());
+    t!(fs::symlink_metadata(td.path().join("foo")).await);
 
     let ar = async_tar::Archive::new(&bytes[..]);
     let mut entries = t!(ar.entries());
@@ -43,7 +50,8 @@ async fn absolute_symlink() {
     assert_eq!(&*entry.link_name_bytes().unwrap(), b"/bar");
 }
 
-#[async_std::test]
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn absolute_hardlink() {
     let td = t!(Builder::new().prefix("tar").tempdir());
     let mut ar = async_tar::Builder::new(Vec::new());
@@ -72,7 +80,8 @@ async fn absolute_hardlink() {
     t!(td.path().join("bar").metadata());
 }
 
-#[async_std::test]
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn relative_hardlink() {
     let mut ar = async_tar::Builder::new(Vec::new());
 
@@ -100,7 +109,8 @@ async fn relative_hardlink() {
     t!(td.path().join("bar").metadata());
 }
 
-#[async_std::test]
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn absolute_link_deref_error() {
     let mut ar = async_tar::Builder::new(Vec::new());
 
@@ -124,11 +134,12 @@ async fn absolute_link_deref_error() {
 
     let td = t!(Builder::new().prefix("tar").tempdir());
     assert!(ar.unpack(td.path()).await.is_err());
-    t!(td.path().join("foo").symlink_metadata());
+    t!(fs::symlink_metadata(td.path().join("foo")).await);
     assert!(File::open(td.path().join("foo").join("bar")).await.is_err());
 }
 
-#[async_std::test]
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn relative_link_deref_error() {
     let mut ar = async_tar::Builder::new(Vec::new());
 
@@ -152,11 +163,12 @@ async fn relative_link_deref_error() {
 
     let td = t!(Builder::new().prefix("tar").tempdir());
     assert!(ar.unpack(td.path()).await.is_err());
-    t!(td.path().join("foo").symlink_metadata());
+    t!(fs::symlink_metadata(td.path().join("foo")).await);
     assert!(File::open(td.path().join("foo").join("bar")).await.is_err());
 }
 
-#[async_std::test]
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
 #[cfg(unix)]
 async fn directory_maintains_permissions() {
     use ::std::os::unix::fs::PermissionsExt;
@@ -182,7 +194,8 @@ async fn directory_maintains_permissions() {
     assert_eq!(md.permissions().mode(), 0o40777);
 }
 
-#[async_std::test]
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
 #[cfg(not(windows))] // dangling symlinks have weird permissions
 async fn modify_link_just_created() {
     let mut ar = async_tar::Builder::new(Vec::new());
@@ -221,7 +234,8 @@ async fn modify_link_just_created() {
     t!(File::open(td.path().join("foo/bar")).await);
 }
 
-#[async_std::test]
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
 #[cfg(not(windows))] // dangling symlinks have weird permissions
 async fn modify_outside_with_relative_symlink() {
     let mut ar = async_tar::Builder::new(Vec::new());
@@ -251,7 +265,8 @@ async fn modify_outside_with_relative_symlink() {
     assert!(!td.path().join("foo").exists());
 }
 
-#[async_std::test]
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn parent_paths_error() {
     let mut ar = async_tar::Builder::new(Vec::new());
 
@@ -279,7 +294,8 @@ async fn parent_paths_error() {
     assert!(File::open(td.path().join("foo").join("bar")).await.is_err());
 }
 
-#[async_std::test]
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
 #[cfg(unix)]
 async fn good_parent_paths_ok() {
     use std::path::PathBuf;
@@ -310,7 +326,8 @@ async fn good_parent_paths_ok() {
     t!(File::open(dst).await);
 }
 
-#[async_std::test]
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn modify_hard_link_just_created() {
     let mut ar = async_tar::Builder::new(Vec::new());
 
@@ -345,7 +362,8 @@ async fn modify_hard_link_just_created() {
     assert_eq!(contents.len(), 0);
 }
 
-#[async_std::test]
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn modify_symlink_just_created() {
     let mut ar = async_tar::Builder::new(Vec::new());
 

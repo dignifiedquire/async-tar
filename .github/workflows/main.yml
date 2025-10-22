@@ -6,22 +6,19 @@ on:
 
 jobs:
 
-  check:
-    name: Test
+  check_tokio:
+    name: Test tokio
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        build: [msrv, stable, beta, nightly, macos, windows]
+        build: [msrv, stable, nightly, macos, windows]
         include:
           - build: msrv
             os: ubuntu-latest
-            rust: 1.63
+            rust: 1.71
           - build: stable
             os: ubuntu-latest
             rust: stable
-          - build: beta
-            os: ubuntu-latest
-            rust: beta
           - build: nightly
             os: ubuntu-latest
             rust: nightly
@@ -41,6 +38,41 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: test
+          args: --no-default-features --features runtime-tokio
+
+  check_async:
+    name: Test async-std
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        build: [msrv, stable, nightly, macos, windows]
+        include:
+          - build: msrv
+            os: ubuntu-latest
+            rust: 1.71
+          - build: stable
+            os: ubuntu-latest
+            rust: stable
+          - build: nightly
+            os: ubuntu-latest
+            rust: nightly
+          - build: macos
+            os: macos-latest
+            rust: stable
+          - build: windows
+            os: windows-latest
+            rust: stable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          override: true
+          toolchain: ${{ matrix.rust }}
+      - uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --no-default-features --features runtime-async-std
 
   fmt:
     name: Check formatting
@@ -58,8 +90,8 @@ jobs:
           command: fmt
           args: --all -- --check
 
-  lint:
-    name: Clippy Linting
+  lint_tokio:
+    name: Clippy Linting tokio
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -72,8 +104,23 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --all
+          args: --no-default-features --features runtime-tokio
 
+  lint_async:
+    name: Clippy Linting async-std
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          components: clippy
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --no-default-features --features runtime-async-std
   docs:
     name: Check docs
     runs-on: ubuntu-latest

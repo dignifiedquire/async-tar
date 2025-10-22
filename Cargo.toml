@@ -11,6 +11,7 @@ readme = "README.md"
 edition = "2018"
 exclude = ["tests/archives/*"]
 resolver = "2"
+rust-version = "1.71"
 
 description = """
 A Rust implementation of an async TAR file reader and writer. This library does not
@@ -20,21 +21,26 @@ contents are never required to be entirely resident in memory all at once.
 """
 
 [dependencies]
-async-std = { version = "1.12.0", features = ["unstable"] }
+async-std = { version = "1.12", optional = true }
+tokio = { version = "1", optional = true, features = ["fs", "io-util"] }
 filetime = "0.2.8"
-pin-project = "1.0.8"
+tokio-stream = { version = "0.1.11", features = ["fs"], optional = true }
+futures-core = "0.3.25"
 
 [dev-dependencies]
-async-std = { version = "1.12.0", features = ["unstable", "attributes"] }
+async-std = { version = "1.12", features = ["unstable", "attributes"] }
+tokio = { version = "1", features = ["rt", "io-std", "rt-multi-thread", "macros"] }
 static_assertions = "1.1.0"
 tempfile = "3"
 
 [target."cfg(unix)".dependencies]
 libc = "0.2"
-xattr = { version = "0.2", optional = true }
+xattr = { version = "1.6", optional = true }
 
 [target.'cfg(target_os = "redox")'.dependencies]
-redox_syscall = "0.2"
+redox_syscall = "0.5"
 
 [features]
-default = [ "xattr" ]
+default = ["xattr", "runtime-async-std"]
+runtime-async-std = ["async-std"]
+runtime-tokio = ["tokio", "tokio-stream"]
