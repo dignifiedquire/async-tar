@@ -34,7 +34,7 @@ libc = "0.2"
 xattr = { version = "0.2", optional = true }
 
 [target.'cfg(target_os = "redox")'.dependencies]
-redox_syscall = "0.2"
+redox_syscall = "0.7"
 
 [features]
 default = [ "xattr" ]
