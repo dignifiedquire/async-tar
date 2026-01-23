@@ -35,6 +35,18 @@ macro_rules! tar {
     };
 }
 
+/// Helper to create a file and write contents, ensuring data is synced to disk.
+/// This is necessary for tokio where metadata isn't updated until sync.
+async fn create_file_with_contents(
+    path: impl AsRef<std::path::Path>,
+    contents: &[u8],
+) -> std::io::Result<()> {
+    let mut file = File::create(path.as_ref()).await?;
+    file.write_all(contents).await?;
+    file.sync_all().await?;
+    Ok(())
+}
+
 mod header;
 
 /// test that we can concatenate the simple.tar archive and extract the same entries twice when we
@@ -150,7 +162,7 @@ async fn writing_files() {
     let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
 
     let path = td.path().join("test");
-    t!(t!(File::create(&path).await).write_all(b"test").await);
+    t!(create_file_with_contents(&path, b"test").await);
 
     t!(ar
         .append_file("test2", &mut t!(File::open(&path).await))
@@ -177,7 +189,7 @@ async fn large_filename() {
     let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
 
     let path = td.path().join("test");
-    t!(t!(File::create(&path).await).write_all(b"test").await);
+    t!(create_file_with_contents(&path, b"test").await);
 
     let filename = "abcd/".repeat(50);
     let mut header = Header::new_ustar();
@@ -353,7 +365,7 @@ async fn writing_and_extracting_directories() {
 
     let mut ar = Builder::new(Vec::new());
     let tmppath = td.path().join("tmpfile");
-    t!(t!(File::create(&tmppath).await).write_all(b"c").await);
+    t!(create_file_with_contents(&tmppath, b"c").await);
     t!(ar.append_dir("a", ".").await);
     t!(ar.append_dir("a/b", ".").await);
     t!(ar
@@ -920,7 +932,7 @@ async fn long_linkname_trailing_nul() {
 async fn encoded_long_name_has_trailing_nul() {
     let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
     let path = td.path().join("foo");
-    t!(t!(File::create(&path).await).write_all(b"test").await);
+    t!(create_file_with_contents(&path, b"test").await);
 
     let mut b = Builder::new(Vec::<u8>::new());
     let long = "abcd".repeat(200);
@@ -1047,7 +1059,7 @@ async fn path_separators() {
     let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
 
     let path = td.path().join("test");
-    t!(t!(File::create(&path).await).write_all(b"test").await);
+    t!(create_file_with_contents(&path, b"test").await);
 
     let short_path: PathBuf = repeat("abcd").take(2).collect();
     let long_path: PathBuf = repeat("abcd").take(50).collect();
@@ -1085,7 +1097,6 @@ async fn path_separators() {
     assert!(!entry.path_bytes().contains(&b'\\'));
 
     let entry = entries.next().await;
-    dbg!(&entry);
     assert!(entry.is_none());
 }
 
@@ -1185,13 +1196,12 @@ async fn insert_local_file_different_name() {
         let mut ar = Builder::new(Vec::new());
         let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
         let path = td.path().join("directory");
-        dbg!(&path);
         t!(fs::create_dir(&path).await);
         ar.append_path_with_name(&path, "archive/dir")
             .await
             .unwrap();
         let path = td.path().join("file");
-        t!(t!(File::create(&path).await).write_all(b"test").await);
+        t!(create_file_with_contents(&path, b"test").await);
         ar.append_path_with_name(&path, "archive/dir/f")
             .await
             .unwrap();
@@ -1204,8 +1214,6 @@ async fn insert_local_file_different_name() {
         let entry = t!(entries.next().await.unwrap());
         assert_eq!(t!(entry.path()), Path::new("archive/dir/f"));
         let entry = entries.next().await;
-
-        dbg!(&entry);
         assert!(entry.is_none());
     }
 }

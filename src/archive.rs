@@ -455,13 +455,12 @@ fn poll_next_raw<R: Read + Unpin>(
         let header = current_header.as_mut().unwrap();
 
         // EOF is an indicator that we are at the end of the archive.
-        let res = dbg!(poll_try_read_all(
+        match ready!(poll_try_read_all(
             archive.clone(),
             cx,
             header.as_mut_bytes(),
             current_header_pos,
-        ));
-        match ready!(res) {
+        )) {
             Ok(true) => {}
             Ok(false) => return Poll::Ready(None),
             Err(err) => return Poll::Ready(Some(Err(err))),
@@ -470,13 +469,12 @@ fn poll_next_raw<R: Read + Unpin>(
         // If a header is not all zeros, we have another valid header.
         // Otherwise, check if we are ignoring zeros and continue, or break as if this is the
         // end of the archive.
-        dbg!(header.as_old(), hex::encode(header.as_bytes()));
-        if dbg!(!header.as_bytes().iter().all(|i| *i == 0)) {
+        if !header.as_bytes().iter().all(|i| *i == 0) {
             *next += 512;
             break;
         }
 
-        if !dbg!(archive.inner.lock().unwrap().ignore_zeros) {
+        if !archive.inner.lock().unwrap().ignore_zeros {
             return Poll::Ready(None);
         }
 
@@ -485,7 +483,6 @@ fn poll_next_raw<R: Read + Unpin>(
     }
 
     let header = current_header.as_mut().unwrap();
-    dbg!(&header);
 
     // Make sure the checksum is ok
     let sum = header.as_bytes()[..148]
@@ -494,8 +491,6 @@ fn poll_next_raw<R: Read + Unpin>(
         .fold(0, |a, b| a + (*b as u32))
         + 8 * 32;
     let cksum = header.cksum()?;
-    dbg!(sum, cksum);
-
     if sum != cksum {
         return Poll::Ready(Some(Err(other("archive header checksum mismatch"))));
     }
@@ -774,20 +769,15 @@ fn poll_try_read_all<R: Read + Unpin>(
     pos: &mut usize,
 ) -> Poll<io::Result<bool>> {
     while *pos < buf.len() {
-        dbg!(buf.len());
         match ready!(Pin::new(&mut source).poll_read(cx, &mut buf[*pos..])) {
             Ok(0) => {
-                dbg!(*pos);
                 if *pos == 0 {
                     return Poll::Ready(Ok(false));
                 }
 
                 return Poll::Ready(Err(other("failed to read entire block")));
             }
-            Ok(n) => {
-                dbg!(*pos, n);
-                *pos += n
-            }
+            Ok(n) => *pos += n,
             Err(err) => return Poll::Ready(Err(err)),
         }
     }
@@ -804,13 +794,11 @@ fn poll_try_read_all<R: Read + Unpin>(
     pos: &mut usize,
 ) -> Poll<io::Result<bool>> {
     while *pos < buf.len() {
-        dbg!(buf.len());
         let mut read_buf = io::ReadBuf::new(&mut buf[*pos..]);
-        debug_assert!(read_buf.filled().is_empty());
+        let start = read_buf.filled().len();
         match ready!(Pin::new(&mut source).poll_read(cx, &mut read_buf)) {
             Ok(()) => {
-                let diff = read_buf.filled().len();
-                dbg!(*pos, diff, read_buf.filled().len());
+                let diff = read_buf.filled().len() - start;
                 if diff == 0 {
                     if *pos == 0 {
                         return Poll::Ready(Ok(false));

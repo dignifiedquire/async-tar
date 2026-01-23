@@ -684,14 +684,14 @@ impl Header {
     ///
     /// May return an error if the field is corrupted.
     pub fn cksum(&self) -> io::Result<u32> {
-        let sum = &self.as_old().cksum;
-        octal_from(sum).map(|u| u as u32).map_err(|err| {
-            dbg!(sum, &err);
-            io::Error::new(
-                err.kind(),
-                format!("{} when getting cksum for {}", err, self.path_lossy()),
-            )
-        })
+        octal_from(&self.as_old().cksum)
+            .map(|u| u as u32)
+            .map_err(|err| {
+                io::Error::new(
+                    err.kind(),
+                    format!("{} when getting cksum for {}", err, self.path_lossy()),
+                )
+            })
     }
 
     /// Sets the checksum field of this header based on the current fields in
@@ -1404,16 +1404,9 @@ fn octal_from(slice: &[u8]) -> io::Result<u64> {
             )));
         }
     };
-    let trimmed = num.trim();
-    if trimmed.is_empty() {
-        return Ok(0);
-    }
-    match u64::from_str_radix(trimmed, 8) {
+    match u64::from_str_radix(num.trim(), 8) {
         Ok(n) => Ok(n),
-        Err(err) => {
-            dbg!(&err, num);
-            Err(other(&format!("numeric field was not a number: {}", num)))
-        }
+        Err(_) => Err(other(&format!("numeric field was not a number: {}", num))),
     }
 }
 

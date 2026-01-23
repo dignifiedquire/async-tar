@@ -20,6 +20,12 @@
 #![deny(missing_docs)]
 #![deny(clippy::all)]
 
+#[cfg(all(feature = "runtime-async-std", feature = "runtime-tokio"))]
+compile_error!("Features `runtime-async-std` and `runtime-tokio` are mutually exclusive. Please enable only one.");
+
+#[cfg(not(any(feature = "runtime-async-std", feature = "runtime-tokio")))]
+compile_error!("Either `runtime-async-std` or `runtime-tokio` feature must be enabled.");
+
 use std::io::{Error, ErrorKind};
 
 pub use crate::{
