@@ -4,8 +4,10 @@ on:
     branches: [master]
   pull_request:
 
-jobs:
+env:
+  CARGO_TERM_COLOR: always
 
+jobs:
   check_tokio:
     name: Test tokio
     runs-on: ${{ matrix.os }}
@@ -15,7 +17,7 @@ jobs:
         include:
           - build: msrv
             os: ubuntu-latest
-            rust: 1.71
+            rust: "1.85"
           - build: stable
             os: ubuntu-latest
             rust: stable
@@ -30,15 +32,10 @@ jobs:
             rust: stable
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
-          override: true
           toolchain: ${{ matrix.rust }}
-      - uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --no-default-features --features runtime-tokio
+      - run: cargo test --no-default-features --features runtime-tokio
 
   check_async:
     name: Test async-std
@@ -49,7 +46,7 @@ jobs:
         include:
           - build: msrv
             os: ubuntu-latest
-            rust: 1.71
+            rust: "1.85"
           - build: stable
             os: ubuntu-latest
             rust: stable
@@ -64,73 +61,45 @@ jobs:
             rust: stable
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
-          override: true
           toolchain: ${{ matrix.rust }}
-      - uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --no-default-features --features runtime-async-std
+      - run: cargo test --no-default-features --features runtime-async-std
 
   fmt:
     name: Check formatting
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
-          toolchain: stable
           components: rustfmt
-          override: true
-      - uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --all -- --check
+      - run: cargo fmt --all -- --check
 
   lint_tokio:
-    name: Clippy Linting tokio
+    name: Clippy tokio
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
-          toolchain: stable
           components: clippy
-          override: true
-      - uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: --no-default-features --features runtime-tokio
+      - run: cargo clippy --no-default-features --features runtime-tokio -- -D warnings
 
   lint_async:
-    name: Clippy Linting async-std
+    name: Clippy async-std
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
-          toolchain: stable
           components: clippy
-          override: true
-      - uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: --no-default-features --features runtime-async-std
+      - run: cargo clippy --no-default-features --features runtime-async-std -- -D warnings
+
   docs:
     name: Check docs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: nightly
-      - uses: actions-rs/cargo@v1
-        with:
-          command: doc
-          args: --no-deps
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo doc --no-deps

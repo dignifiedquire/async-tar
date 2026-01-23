@@ -3,7 +3,7 @@ use std::os::unix::prelude::*;
 #[cfg(windows)]
 use std::os::windows::prelude::*;
 
-use std::{borrow::Cow, fmt, iter, iter::repeat, mem, str};
+use std::{borrow::Cow, fmt, iter, iter::repeat, iter::repeat_n, mem, str};
 
 #[cfg(all(windows, feature = "runtime-async-std"))]
 use async_std::fs;
@@ -23,7 +23,7 @@ use tokio::fs;
 #[cfg(feature = "runtime-tokio")]
 use tokio::io;
 
-use crate::{other, EntryType};
+use crate::{EntryType, other};
 
 /// Representation of the header of an entry in an archive
 #[repr(C)]
@@ -709,7 +709,7 @@ impl Header {
         let len = old.cksum.len();
         self.bytes[0..offset]
             .iter()
-            .chain(iter::repeat(&b' ').take(len))
+            .chain(iter::repeat_n(&b' ', len))
             .chain(&self.bytes[offset + len..])
             .fold(0, |a, b| a + (*b as u32))
     }
@@ -900,13 +900,13 @@ impl<T: fmt::Octal> fmt::Debug for DebugAsOctal<T> {
 unsafe fn cast<T, U>(a: &T) -> &U {
     assert_eq!(mem::size_of_val(a), mem::size_of::<U>());
     assert_eq!(mem::align_of_val(a), mem::align_of::<U>());
-    &*(a as *const T as *const U)
+    unsafe { &*(a as *const T as *const U) }
 }
 
 unsafe fn cast_mut<T, U>(a: &mut T) -> &mut U {
     assert_eq!(mem::size_of_val(a), mem::size_of::<U>());
     assert_eq!(mem::align_of_val(a), mem::align_of::<U>());
-    &mut *(a as *mut T as *mut U)
+    unsafe { &mut *(a as *mut T as *mut U) }
 }
 
 impl Clone for Header {
@@ -1445,8 +1445,7 @@ fn num_field_wrapper_from(src: &[u8]) -> io::Result<u64> {
 fn numeric_extended_into(dst: &mut [u8], src: u64) {
     let len: usize = dst.len();
     for (slot, val) in dst.iter_mut().zip(
-        repeat(0)
-            .take(len - 8) // to zero init extra bytes
+        repeat_n(0, len - 8) // to zero init extra bytes
             .chain((0..8).rev().map(|x| ((src >> (8 * x)) & 0xff) as u8)),
     ) {
         *slot = val;

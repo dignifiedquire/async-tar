@@ -21,12 +21,14 @@
 #![deny(clippy::all)]
 
 #[cfg(all(feature = "runtime-async-std", feature = "runtime-tokio"))]
-compile_error!("Features `runtime-async-std` and `runtime-tokio` are mutually exclusive. Please enable only one.");
+compile_error!(
+    "Features `runtime-async-std` and `runtime-tokio` are mutually exclusive. Please enable only one."
+);
 
 #[cfg(not(any(feature = "runtime-async-std", feature = "runtime-tokio")))]
 compile_error!("Either `runtime-async-std` or `runtime-tokio` feature must be enabled.");
 
-use std::io::{Error, ErrorKind};
+use std::io::Error;
 
 pub use crate::{
     archive::{Archive, ArchiveBuilder, Entries},
@@ -52,7 +54,7 @@ mod pax;
 extern crate static_assertions;
 
 fn other(msg: &str) -> Error {
-    Error::new(ErrorKind::Other, msg)
+    Error::other(msg)
 }
 
 #[cfg(feature = "runtime-async-std")]

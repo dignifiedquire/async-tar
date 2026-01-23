@@ -9,7 +9,7 @@ use std::{
 use async_std::{
     fs,
     fs::{OpenOptions, Permissions},
-    io::{self, prelude::*, Error, ErrorKind, SeekFrom},
+    io::{self, Error, ErrorKind, SeekFrom, prelude::*},
     path::{Component, Path, PathBuf},
 };
 use futures_core::ready;
@@ -28,8 +28,8 @@ use tokio::{
 use filetime::{self, FileTime};
 
 use crate::{
-    error::TarError, fs_canonicalize, header::bytes2path, other, pax::pax_extensions,
-    symlink_metadata, Archive, Header, PaxExtensions,
+    Archive, Header, PaxExtensions, error::TarError, fs_canonicalize, header::bytes2path, other,
+    pax::pax_extensions, symlink_metadata,
 };
 
 /// A read-only view into an entry of an archive.
@@ -891,7 +891,7 @@ impl<R: Read + Unpin> EntryFields<R> {
                     canon_target.display()
                 ),
                 // TODO: use ErrorKind::InvalidInput here? (minor breaking change)
-                Error::new(ErrorKind::Other, "Invalid argument"),
+                Error::other("Invalid argument"),
             );
             return Err(err.into());
         }
@@ -915,7 +915,7 @@ impl<R: Read + Unpin> Read for EntryFields<R> {
                 }
             }
 
-            if let Some(ref mut io) = &mut self.read_state {
+            if let Some(io) = &mut self.read_state {
                 let ret = Pin::new(io).poll_read(cx, into);
                 match ret {
                     Poll::Ready(Ok(0)) => {
@@ -958,7 +958,7 @@ impl<R: Read + Unpin> Read for EntryFields<R> {
                 }
             }
 
-            if let Some(ref mut io) = &mut self.read_state {
+            if let Some(io) = &mut self.read_state {
                 let start = into.filled().len();
                 let ret = Pin::new(io).poll_read(cx, into);
                 match ret {
