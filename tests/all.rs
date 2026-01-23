@@ -1180,27 +1180,34 @@ async fn name_with_slash_doesnt_fool_long_link_and_bsd_compat() {
 #[cfg_attr(feature = "runtime-async-std", async_std::test)]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn insert_local_file_different_name() {
-    let mut ar = Builder::new(Vec::new());
-    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
-    let path = td.path().join("directory");
-    t!(fs::create_dir(&path).await);
-    ar.append_path_with_name(&path, "archive/dir")
-        .await
-        .unwrap();
-    let path = td.path().join("file");
-    t!(t!(File::create(&path).await).write_all(b"test").await);
-    ar.append_path_with_name(&path, "archive/dir/f")
-        .await
-        .unwrap();
+    for i in 0..100 {
+        println!("----- {i} ---");
+        let mut ar = Builder::new(Vec::new());
+        let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
+        let path = td.path().join("directory");
+        dbg!(&path);
+        t!(fs::create_dir(&path).await);
+        ar.append_path_with_name(&path, "archive/dir")
+            .await
+            .unwrap();
+        let path = td.path().join("file");
+        t!(t!(File::create(&path).await).write_all(b"test").await);
+        ar.append_path_with_name(&path, "archive/dir/f")
+            .await
+            .unwrap();
 
-    let rd = t!(ar.into_inner().await);
-    let ar = Archive::new(&rd[..]);
-    let mut entries = t!(ar.entries());
-    let entry = t!(entries.next().await.unwrap());
-    assert_eq!(t!(entry.path()), Path::new("archive/dir"));
-    let entry = t!(entries.next().await.unwrap());
-    assert_eq!(t!(entry.path()), Path::new("archive/dir/f"));
-    assert!(entries.next().await.is_none());
+        let rd = t!(ar.into_inner().await);
+        let ar = Archive::new(&rd[..]);
+        let mut entries = t!(ar.entries());
+        let entry = t!(entries.next().await.unwrap());
+        assert_eq!(t!(entry.path()), Path::new("archive/dir"));
+        let entry = t!(entries.next().await.unwrap());
+        assert_eq!(t!(entry.path()), Path::new("archive/dir/f"));
+        let entry = entries.next().await;
+
+        dbg!(&entry);
+        assert!(entry.is_none());
+    }
 }
 
 #[cfg_attr(feature = "runtime-async-std", async_std::test)]
