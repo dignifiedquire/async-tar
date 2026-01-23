@@ -477,6 +477,8 @@ async fn append_dir_all_does_not_work_on_non_directory() {
     let mut ar = Builder::new(Vec::new());
     let result = ar.append_dir_all("test", path).await;
     assert!(result.is_err());
+    // Must finalize even after error (required for tokio runtime)
+    t!(ar.finish().await);
 }
 
 #[cfg_attr(feature = "runtime-async-std", async_std::test)]
@@ -589,6 +591,7 @@ async fn extracting_malicious_tarball() {
         append(&mut a, "..").await;
         append(&mut a, "/////////..").await;
         append(&mut a, "/////////").await;
+        t!(a.finish().await);
     }
 
     let ar = Archive::new(&evil_tar[..]);
@@ -793,6 +796,8 @@ async fn nul_bytes_in_path() {
     let mut ar = Builder::new(Vec::<u8>::new());
     let err = ar.append_dir(nul_path, td.path()).await.unwrap_err();
     assert!(err.to_string().contains("contains a nul byte"));
+    // Must finalize even after error (required for tokio runtime)
+    t!(ar.finish().await);
 }
 
 #[cfg_attr(feature = "runtime-async-std", async_std::test)]

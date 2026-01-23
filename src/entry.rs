@@ -605,7 +605,14 @@ impl<R: Read + Unpin> EntryFields<R> {
 
             #[cfg(windows)]
             async fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
-                async_std::os::windows::fs::symlink_file(src, dst).await
+                #[cfg(feature = "runtime-async-std")]
+                {
+                    async_std::os::windows::fs::symlink_file(src, dst).await
+                }
+                #[cfg(feature = "runtime-tokio")]
+                {
+                    tokio::fs::symlink_file(src, dst).await
+                }
             }
 
             #[cfg(any(unix, target_os = "redox"))]

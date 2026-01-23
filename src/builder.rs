@@ -30,6 +30,12 @@ use crate::{
 ///
 /// This structure has methods for building up an archive from scratch into any
 /// arbitrary writer.
+///
+/// You **must** call [`finish`] or [`into_inner`] to finalize the archive.
+/// The `runtime-tokio` feature will panic on drop if not finalized.
+///
+/// [`into_inner`]: Builder::into_inner
+/// [`finish`]: Builder::finish
 pub struct Builder<W: Write + Unpin + Send + Sync> {
     mode: HeaderMode,
     follow: bool,
@@ -617,7 +623,10 @@ async fn append_dir_all(
         }
         #[cfg(feature = "runtime-tokio")]
         async fn check_is_dir(path: &Path) -> bool {
-            path.is_dir()
+            fs::metadata(path)
+                .await
+                .map(|m| m.is_dir())
+                .unwrap_or(false)
         }
 
         // In case of a symlink pointing to a directory, is_dir is false, but src.is_dir() will return true
@@ -651,6 +660,15 @@ impl<W: Write + Unpin + Send + Sync> Drop for Builder<W> {
         async_std::task::block_on(async move {
             let _ = self.finish().await;
         });
+    }
+}
+
+#[cfg(feature = "runtime-tokio")]
+impl<W: Write + Unpin + Send + Sync> Drop for Builder<W> {
+    fn drop(&mut self) {
+        if !self.finished && !std::thread::panicking() && self.obj.is_some() {
+            panic!("Builder dropped without finalizing; call finish() or into_inner()");
+        }
     }
 }
 
