@@ -13,11 +13,10 @@ use async_std::{
     path::{Component, Path, PathBuf},
 };
 use futures_core::ready;
+#[cfg(all(unix, feature = "runtime-tokio"))]
+use std::fs::Permissions;
 #[cfg(feature = "runtime-tokio")]
-use std::{
-    fs::Permissions,
-    path::{Component, Path, PathBuf},
-};
+use std::path::{Component, Path, PathBuf};
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
     fs,

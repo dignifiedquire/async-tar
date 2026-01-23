@@ -1,12 +1,12 @@
 #[cfg(feature = "runtime-async-std")]
 use async_std::{
-    fs::{self, create_dir, File},
+    fs::{self, File, create_dir},
     prelude::*,
 };
 
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
-    fs::{self, create_dir, File},
+    fs::{self, File, create_dir},
     io::AsyncReadExt,
 };
 #[cfg(feature = "runtime-tokio")]

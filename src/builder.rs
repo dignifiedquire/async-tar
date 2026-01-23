@@ -22,8 +22,9 @@ use tokio::{
 use tokio_stream::StreamExt;
 
 use crate::{
-    header::{bytes2path, path2bytes, HeaderMode},
-    metadata, other, symlink_metadata, EntryType, Header,
+    EntryType, Header,
+    header::{HeaderMode, bytes2path, path2bytes},
+    metadata, other, symlink_metadata,
 };
 
 /// A structure for building archives

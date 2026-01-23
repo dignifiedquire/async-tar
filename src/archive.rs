@@ -24,11 +24,12 @@ use tokio::{
 use tokio_stream::{Stream, StreamExt};
 
 use crate::{
+    Entry, GnuExtSparseHeader, GnuSparseHeader, Header,
     entry::{EntryFields, EntryIo},
     error::TarError,
     fs_canonicalize, other,
     pax::pax_extensions,
-    symlink_metadata, Entry, GnuExtSparseHeader, GnuSparseHeader, Header,
+    symlink_metadata,
 };
 
 /// A top-level representation of an archive file.

@@ -800,7 +800,7 @@ impl Header {
     }
 
     #[cfg(windows)]
-    fn fill_platform_from(&mut self, meta: &fs::Metadata, mode: HeaderMode) {
+    fn fill_platform_from(&mut self, meta: &Metadata, mode: HeaderMode) {
         // There's no concept of a file mode on Windows, so do a best approximation here.
         match mode {
             HeaderMode::Complete => {
