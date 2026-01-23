@@ -43,14 +43,15 @@
 ## Features
 
 - `runtime-async-std`: enabled by default, makes this crate compatible with `async-std`
-- `runtime-tokio`: makes this crate compatible with `tokio`.
+- `runtime-tokio`: makes this crate compatible with `tokio`
+
+> **Note**: These features are mutually exclusive. Enable only one runtime feature.
 
 ## Reading an archive
 
 ```rust,no_run
 use async_std::io::stdin;
 use async_std::prelude::*;
-
 use async_tar::Archive;
 
 fn main() {
@@ -80,13 +81,14 @@ fn main() {
         a.append_file("lib.rs", &mut File::open("src/lib.rs").await.unwrap())
             .await
             .unwrap();
+        a.into_inner().await.unwrap();
     });
 }
 ```
 
 # MSRV
 
-Minimal stable rust version: 1.71
+Minimal stable rust version: 1.85
 
 *An increase to the MSRV is accompanied by a minor version bump*
 
