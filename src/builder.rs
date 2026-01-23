@@ -1,21 +1,42 @@
 use std::borrow::Cow;
 
+#[cfg(feature = "runtime-async-std")]
+use async_std::fs::Metadata;
+#[cfg(feature = "runtime-async-std")]
 use async_std::{
     fs,
     io::{self, Read, Write},
     path::Path,
     prelude::*,
 };
+#[cfg(feature = "runtime-tokio")]
+use std::fs::Metadata;
+#[cfg(feature = "runtime-tokio")]
+use std::path::Path;
+#[cfg(feature = "runtime-tokio")]
+use tokio::{
+    fs,
+    io::{self, AsyncRead as Read, AsyncReadExt, AsyncWrite as Write, AsyncWriteExt},
+};
+#[cfg(feature = "runtime-tokio")]
+use tokio_stream::StreamExt;
 
 use crate::{
-    header::{bytes2path, path2bytes, HeaderMode},
-    other, EntryType, Header,
+    EntryType, Header,
+    header::{HeaderMode, bytes2path, path2bytes},
+    metadata, other, symlink_metadata,
 };
 
 /// A structure for building archives
 ///
 /// This structure has methods for building up an archive from scratch into any
 /// arbitrary writer.
+///
+/// You **must** call [`finish`] or [`into_inner`] to finalize the archive.
+/// The `runtime-tokio` feature will panic on drop if not finalized.
+///
+/// [`into_inner`]: Builder::into_inner
+/// [`finish`]: Builder::finish
 pub struct Builder<W: Write + Unpin + Send + Sync> {
     mode: HeaderMode,
     follow: bool,
@@ -98,7 +119,8 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     ///
     /// # Examples
     ///
-    /// ```
+    #[cfg_attr(feature = "runtime-async-std", doc = "```")]
+    #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
     /// #
     /// use async_tar::{Builder, Header};
@@ -280,7 +302,8 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    #[cfg_attr(feature = "runtime-async-std", doc = "```no_run")]
+    #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
     /// #
     /// use async_std::fs::File;
@@ -320,7 +343,8 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     ///
     /// # Examples
     ///
-    /// ```
+    #[cfg_attr(feature = "runtime-async-std", doc = "```")]
+    #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
     /// #
     /// use async_std::fs;
@@ -356,7 +380,8 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     ///
     /// # Examples
     ///
-    /// ```
+    #[cfg_attr(feature = "runtime-async-std", doc = "```")]
+    #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
     /// #
     /// use async_std::fs;
@@ -368,7 +393,7 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// // with a different name.
     /// ar.append_dir_all("bardir", ".").await?;
     /// #
-    /// # Ok(()) }) }
+    /// # Ok(()) })}
     /// ```
     pub async fn append_dir_all<P, Q>(&mut self, path: P, src_path: Q) -> io::Result<()>
     where
@@ -431,14 +456,14 @@ async fn append_path_with_name(
     follow: bool,
 ) -> io::Result<()> {
     let stat = if follow {
-        fs::metadata(path).await.map_err(|err| {
+        metadata(path).await.map_err(|err| {
             io::Error::new(
                 err.kind(),
                 format!("{} when getting metadata for {}", err, path.display()),
             )
         })?
     } else {
-        fs::symlink_metadata(path).await.map_err(|err| {
+        symlink_metadata(path).await.map_err(|err| {
             io::Error::new(
                 err.kind(),
                 format!("{} when getting metadata for {}", err, path.display()),
@@ -564,7 +589,7 @@ async fn prepare_header_link(
 async fn append_fs(
     dst: &mut (dyn Write + Unpin + Send + Sync),
     path: &Path,
-    meta: &fs::Metadata,
+    meta: &Metadata,
     read: &mut (dyn Read + Unpin + Sync + Send),
     mode: HeaderMode,
     link_name: Option<&Path>,
@@ -593,9 +618,24 @@ async fn append_dir_all(
     while let Some((src, is_dir, is_symlink)) = stack.pop() {
         let dest = path.join(src.strip_prefix(src_path).unwrap());
 
+        #[cfg(feature = "runtime-async-std")]
+        async fn check_is_dir(path: &Path) -> bool {
+            path.is_dir().await
+        }
+        #[cfg(feature = "runtime-tokio")]
+        async fn check_is_dir(path: &Path) -> bool {
+            fs::metadata(path)
+                .await
+                .map(|m| m.is_dir())
+                .unwrap_or(false)
+        }
+
         // In case of a symlink pointing to a directory, is_dir is false, but src.is_dir() will return true
-        if is_dir || (is_symlink && follow && src.is_dir().await) {
+        if is_dir || (is_symlink && follow && check_is_dir(&src).await) {
+            #[cfg(feature = "runtime-async-std")]
             let mut entries = fs::read_dir(&src).await?;
+            #[cfg(feature = "runtime-tokio")]
+            let mut entries = tokio_stream::wrappers::ReadDirStream::new(fs::read_dir(&src).await?);
             while let Some(entry) = entries.next().await {
                 let entry = entry?;
                 let file_type = entry.file_type().await?;
@@ -615,6 +655,7 @@ async fn append_dir_all(
     Ok(())
 }
 
+#[cfg(feature = "runtime-async-std")]
 impl<W: Write + Unpin + Send + Sync> Drop for Builder<W> {
     fn drop(&mut self) {
         async_std::task::block_on(async move {
@@ -623,10 +664,19 @@ impl<W: Write + Unpin + Send + Sync> Drop for Builder<W> {
     }
 }
 
+#[cfg(feature = "runtime-tokio")]
+impl<W: Write + Unpin + Send + Sync> Drop for Builder<W> {
+    fn drop(&mut self) {
+        if !self.finished && !std::thread::panicking() && self.obj.is_some() {
+            panic!("Builder dropped without finalizing; call finish() or into_inner()");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    assert_impl_all!(async_std::fs::File: Send, Sync);
-    assert_impl_all!(Builder<async_std::fs::File>: Send, Sync);
+    assert_impl_all!(fs::File: Send, Sync);
+    assert_impl_all!(Builder<fs::File>: Send, Sync);
 }

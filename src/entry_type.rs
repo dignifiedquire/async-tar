@@ -1,8 +1,9 @@
-// See https://en.wikipedia.org/wiki/Tar_%28computing%29#UStar_format
-/// Indicate for the type of file described by a header.
-///
-/// Each `Header` has an `entry_type` method returning an instance of this type
-/// which can be used to inspect what the header is describing.
+//! Indicate for the type of file described by a header.
+//!
+//! Each `Header` has an `entry_type` method returning an instance of this type
+//! which can be used to inspect what the header is describing.
+//!
+//! See <https://en.wikipedia.org/wiki/Tar_%28computing%29#UStar_format>
 
 /// A non-exhaustive enum representing the possible entry types
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
