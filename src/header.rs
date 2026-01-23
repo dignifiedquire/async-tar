@@ -5,10 +5,8 @@ use std::os::windows::prelude::*;
 
 use std::{borrow::Cow, fmt, iter, iter::repeat, mem, str};
 
-use async_std::{
-    fs, io,
-    path::{Component, Path, PathBuf},
-};
+use smol::{fs, io};
+use std::path::{Component, Path, PathBuf};
 
 use crate::{other, EntryType};
 
@@ -328,7 +326,7 @@ impl Header {
     ///
     /// Note that this function will convert any `\` characters to directory
     /// separators.
-    pub fn path(&self) -> io::Result<Cow<Path>> {
+    pub fn path(&self) -> io::Result<Cow<'_, Path>> {
         bytes2path(self.path_bytes())
     }
 
@@ -339,7 +337,7 @@ impl Header {
     ///
     /// Note that this function will convert any `\` characters to directory
     /// separators.
-    pub fn path_bytes(&self) -> Cow<[u8]> {
+    pub fn path_bytes(&self) -> Cow<'_, [u8]> {
         if let Some(ustar) = self.as_ustar() {
             ustar.path_bytes()
         } else {
@@ -397,7 +395,7 @@ impl Header {
     ///
     /// Note that this function will convert any `\` characters to directory
     /// separators.
-    pub fn link_name(&self) -> io::Result<Option<Cow<Path>>> {
+    pub fn link_name(&self) -> io::Result<Option<Cow<'_, Path>>> {
         match self.link_name_bytes() {
             Some(bytes) => bytes2path(bytes).map(Some),
             None => Ok(None),
@@ -411,7 +409,7 @@ impl Header {
     ///
     /// Note that this function will convert any `\` characters to directory
     /// separators.
-    pub fn link_name_bytes(&self) -> Option<Cow<[u8]>> {
+    pub fn link_name_bytes(&self) -> Option<Cow<'_, [u8]>> {
         let old = self.as_old();
         if old.linkname[0] == 0 {
             None
@@ -936,7 +934,7 @@ impl fmt::Debug for OldHeader {
 
 impl UstarHeader {
     /// See `Header::path_bytes`
-    pub fn path_bytes(&self) -> Cow<[u8]> {
+    pub fn path_bytes(&self) -> Cow<'_, [u8]> {
         if self.prefix[0] == 0 && !self.name.contains(&b'\\') {
             Cow::Borrowed(truncate(&self.name))
         } else {
@@ -1470,7 +1468,7 @@ fn truncate(slice: &[u8]) -> &[u8] {
 fn copy_into(slot: &mut [u8], bytes: &[u8]) -> io::Result<()> {
     if bytes.len() > slot.len() {
         Err(other("provided value is too long"))
-    } else if bytes.iter().any(|b| *b == 0) {
+    } else if bytes.contains(&0) {
         Err(other("provided value contains a nul byte"))
     } else {
         for (slot, val) in slot.iter_mut().zip(bytes.iter().chain(Some(&0))) {
@@ -1527,7 +1525,7 @@ fn copy_path_into_inner(
         return Err(other("paths in archives must have at least one component"));
     }
     if ends_with_slash(path) {
-        copy(&mut slot, &[b'/'])?;
+        copy(&mut slot, b"/")?;
     }
     return Ok(());
 
@@ -1578,7 +1576,7 @@ fn ends_with_slash(p: &Path) -> bool {
 
 #[cfg(any(unix, target_os = "redox"))]
 fn ends_with_slash(p: &Path) -> bool {
-    p.as_os_str().as_bytes().ends_with(&[b'/'])
+    p.as_os_str().as_bytes().ends_with(b"/")
 }
 
 #[cfg(any(windows, target_arch = "wasm32"))]
@@ -1605,7 +1603,7 @@ pub fn path2bytes(p: &Path) -> io::Result<Cow<[u8]>> {
 
 #[cfg(any(unix, target_os = "redox"))]
 /// On unix this will never fail
-pub fn path2bytes(p: &Path) -> io::Result<Cow<[u8]>> {
+pub fn path2bytes(p: &Path) -> io::Result<Cow<'_, [u8]>> {
     Ok(Cow::Borrowed(p.as_os_str().as_bytes()))
 }
 

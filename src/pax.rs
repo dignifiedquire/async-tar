@@ -1,6 +1,6 @@
 use std::{slice, str};
 
-use async_std::io;
+use smol::io;
 
 use crate::other;
 
@@ -18,7 +18,7 @@ pub struct PaxExtension<'entry> {
     value: &'entry [u8],
 }
 
-pub fn pax_extensions(a: &[u8]) -> PaxExtensions {
+pub fn pax_extensions(a: &[u8]) -> PaxExtensions<'_> {
     PaxExtensions {
         data: a.split(|a| *a == b'\n'),
     }

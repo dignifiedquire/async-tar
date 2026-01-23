@@ -1,11 +1,11 @@
 use std::borrow::Cow;
 
-use async_std::{
+use smol::{
     fs,
-    io::{self, Read, Write},
-    path::Path,
-    prelude::*,
+    io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    stream::StreamExt,
 };
+use std::path::Path;
 
 use crate::{
     header::{bytes2path, path2bytes, HeaderMode},
@@ -16,14 +16,14 @@ use crate::{
 ///
 /// This structure has methods for building up an archive from scratch into any
 /// arbitrary writer.
-pub struct Builder<W: Write + Unpin + Send + Sync> {
+pub struct Builder<W: AsyncWrite + Unpin + Send + Sync> {
     mode: HeaderMode,
     follow: bool,
     finished: bool,
     obj: Option<W>,
 }
 
-impl<W: Write + Unpin + Send + Sync> Builder<W> {
+impl<W: AsyncWrite + Unpin + Send + Sync> Builder<W> {
     /// Create a new archive builder with the underlying object as the
     /// destination of all data written. The builder will use
     /// `HeaderMode::Complete` by default.
@@ -99,7 +99,7 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// # Examples
     ///
     /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
     /// use async_tar::{Builder, Header};
     ///
@@ -116,7 +116,7 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// #
     /// # Ok(()) }) }
     /// ```
-    pub async fn append<R: Read + Unpin + Send>(
+    pub async fn append<R: AsyncRead + Unpin + Send>(
         &mut self,
         header: &Header,
         mut data: R,
@@ -154,7 +154,7 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// # Examples
     ///
     /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
     /// use async_tar::{Builder, Header};
     ///
@@ -170,7 +170,7 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// #
     /// # Ok(()) }) }
     /// ```
-    pub async fn append_data<P: AsRef<Path>, R: Read + Unpin + Send>(
+    pub async fn append_data<P: AsRef<Path>, R: AsyncRead + Unpin + Send>(
         &mut self,
         header: &mut Header,
         path: P,
@@ -201,7 +201,7 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// # Examples
     ///
     /// ```no_run
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
     /// use async_tar::Builder;
     ///
@@ -235,7 +235,7 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// # Examples
     ///
     /// ```no_run
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
     /// use async_tar::Builder;
     ///
@@ -281,9 +281,9 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// # Examples
     ///
     /// ```no_run
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
-    /// use async_std::fs::File;
+    /// use smol::fs::File;
     /// use async_tar::Builder;
     ///
     /// let mut ar = Builder::new(Vec::new());
@@ -321,9 +321,9 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// # Examples
     ///
     /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
-    /// use async_std::fs;
+    /// use smol::fs;
     /// use async_tar::Builder;
     ///
     /// let mut ar = Builder::new(Vec::new());
@@ -357,9 +357,9 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// # Examples
     ///
     /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
-    /// use async_std::fs;
+    /// use smol::fs;
     /// use async_tar::Builder;
     ///
     /// let mut ar = Builder::new(Vec::new());
@@ -406,9 +406,9 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
 }
 
 async fn append(
-    mut dst: &mut (dyn Write + Unpin + Send),
+    mut dst: &mut (dyn AsyncWrite + Unpin + Send),
     header: &Header,
-    mut data: &mut (dyn Read + Unpin + Send),
+    mut data: &mut (dyn AsyncRead + Unpin + Send),
 ) -> io::Result<()> {
     dst.write_all(header.as_bytes()).await?;
     let len = io::copy(&mut data, &mut dst).await?;
@@ -424,7 +424,7 @@ async fn append(
 }
 
 async fn append_path_with_name(
-    dst: &mut (dyn Write + Unpin + Sync + Send),
+    dst: &mut (dyn AsyncWrite + Unpin + Sync + Send),
     path: &Path,
     name: Option<&Path>,
     mode: HeaderMode,
@@ -478,7 +478,7 @@ async fn append_path_with_name(
 }
 
 async fn append_file(
-    dst: &mut (dyn Write + Unpin + Send + Sync),
+    dst: &mut (dyn AsyncWrite + Unpin + Send + Sync),
     path: &Path,
     file: &mut fs::File,
     mode: HeaderMode,
@@ -489,7 +489,7 @@ async fn append_file(
 }
 
 async fn append_dir(
-    dst: &mut (dyn Write + Unpin + Send + Sync),
+    dst: &mut (dyn AsyncWrite + Unpin + Send + Sync),
     path: &Path,
     src_path: &Path,
     mode: HeaderMode,
@@ -515,7 +515,7 @@ fn prepare_header(size: u64, entry_type: EntryType) -> Header {
 }
 
 async fn prepare_header_path(
-    dst: &mut (dyn Write + Unpin + Send + Sync),
+    dst: &mut (dyn AsyncWrite + Unpin + Send + Sync),
     header: &mut Header,
     path: &Path,
 ) -> io::Result<()> {
@@ -544,7 +544,7 @@ async fn prepare_header_path(
 }
 
 async fn prepare_header_link(
-    dst: &mut (dyn Write + Unpin + Send + Sync),
+    dst: &mut (dyn AsyncWrite + Unpin + Send + Sync),
     header: &mut Header,
     link_name: &Path,
 ) -> io::Result<()> {
@@ -562,10 +562,10 @@ async fn prepare_header_link(
 }
 
 async fn append_fs(
-    dst: &mut (dyn Write + Unpin + Send + Sync),
+    dst: &mut (dyn AsyncWrite + Unpin + Send + Sync),
     path: &Path,
     meta: &fs::Metadata,
-    read: &mut (dyn Read + Unpin + Sync + Send),
+    read: &mut (dyn AsyncRead + Unpin + Sync + Send),
     mode: HeaderMode,
     link_name: Option<&Path>,
 ) -> io::Result<()> {
@@ -583,7 +583,7 @@ async fn append_fs(
 }
 
 async fn append_dir_all(
-    dst: &mut (dyn Write + Unpin + Send + Sync),
+    dst: &mut (dyn AsyncWrite + Unpin + Send + Sync),
     path: &Path,
     src_path: &Path,
     mode: HeaderMode,
@@ -593,8 +593,16 @@ async fn append_dir_all(
     while let Some((src, is_dir, is_symlink)) = stack.pop() {
         let dest = path.join(src.strip_prefix(src_path).unwrap());
 
-        // In case of a symlink pointing to a directory, is_dir is false, but src.is_dir() will return true
-        if is_dir || (is_symlink && follow && src.is_dir().await) {
+        //// In case of a symlink pointing to a directory, is_dir is false,
+        // but resolving its metadata will return true.
+        let should_treat_as_dir = is_dir
+            || (is_symlink && follow && {
+                smol::fs::metadata(&src)
+                    .await
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false)
+            });
+        if should_treat_as_dir {
             let mut entries = fs::read_dir(&src).await?;
             while let Some(entry) = entries.next().await {
                 let entry = entry?;
@@ -615,9 +623,9 @@ async fn append_dir_all(
     Ok(())
 }
 
-impl<W: Write + Unpin + Send + Sync> Drop for Builder<W> {
+impl<W: AsyncWrite + Unpin + Send + Sync> Drop for Builder<W> {
     fn drop(&mut self) {
-        async_std::task::block_on(async move {
+        smol::block_on(async move {
             let _ = self.finish().await;
         });
     }
@@ -627,6 +635,6 @@ impl<W: Write + Unpin + Send + Sync> Drop for Builder<W> {
 mod tests {
     use super::*;
 
-    assert_impl_all!(async_std::fs::File: Send, Sync);
-    assert_impl_all!(Builder<async_std::fs::File>: Send, Sync);
+    assert_impl_all!(smol::fs::File: Send, Sync);
+    assert_impl_all!(Builder<smol::fs::File>: Send, Sync);
 }

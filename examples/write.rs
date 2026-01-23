@@ -1,10 +1,10 @@
 extern crate async_tar;
 
-use async_std::fs::File;
 use async_tar::Builder;
+use smol::fs::File;
 
 fn main() {
-    async_std::task::block_on(async {
+    smol::block_on(async {
         let file = File::create("foo.tar").await.unwrap();
         let mut a = Builder::new(file);
 

@@ -5,13 +5,13 @@ use std::{
     task::{Context, Poll},
 };
 
-use async_std::{
+use pin_project::pin_project;
+use smol::{
     fs,
     fs::OpenOptions,
-    io::{self, prelude::*, Error, ErrorKind, SeekFrom},
-    path::{Component, Path, PathBuf},
+    io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, Error, ErrorKind, SeekFrom},
 };
-use pin_project::pin_project;
+use std::path::{Component, Path, PathBuf};
 
 use filetime::{self, FileTime};
 
@@ -22,16 +22,16 @@ use crate::{
 /// A read-only view into an entry of an archive.
 ///
 /// This structure is a window into a portion of a borrowed archive which can
-/// be inspected. It acts as a file handle by implementing the Reader trait. An
+/// be inspected. It acts as a file handle by implementing the AsyncReader trait. An
 /// entry cannot be rewritten once inserted into an archive.
 #[pin_project]
-pub struct Entry<R: Read + Unpin> {
+pub struct Entry<R: AsyncRead + Unpin> {
     #[pin]
     fields: EntryFields<R>,
     _ignored: marker::PhantomData<Archive<R>>,
 }
 
-impl<R: Read + Unpin> fmt::Debug for Entry<R> {
+impl<R: AsyncRead + Unpin> fmt::Debug for Entry<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Entry")
             .field("fields", &self.fields)
@@ -42,7 +42,7 @@ impl<R: Read + Unpin> fmt::Debug for Entry<R> {
 // private implementation detail of `Entry`, but concrete (no type parameters)
 // and also all-public to be constructed from other modules.
 #[pin_project]
-pub struct EntryFields<R: Read + Unpin> {
+pub struct EntryFields<R: AsyncRead + Unpin> {
     pub long_pathname: Option<Vec<u8>>,
     pub long_linkname: Option<Vec<u8>>,
     pub pax_extensions: Option<Vec<u8>>,
@@ -59,7 +59,7 @@ pub struct EntryFields<R: Read + Unpin> {
     pub(crate) read_state: Option<EntryIo<R>>,
 }
 
-impl<R: Read + Unpin> fmt::Debug for EntryFields<R> {
+impl<R: AsyncRead + Unpin> fmt::Debug for EntryFields<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EntryFields")
             .field("long_pathname", &self.long_pathname)
@@ -79,12 +79,12 @@ impl<R: Read + Unpin> fmt::Debug for EntryFields<R> {
 }
 
 #[pin_project(project = EntryIoProject)]
-pub enum EntryIo<R: Read + Unpin> {
+pub enum EntryIo<R: AsyncRead + Unpin> {
     Pad(#[pin] io::Take<io::Repeat>),
     Data(#[pin] io::Take<R>),
 }
 
-impl<R: Read + Unpin> fmt::Debug for EntryIo<R> {
+impl<R: AsyncRead + Unpin> fmt::Debug for EntryIo<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             EntryIo::Pad(_) => write!(f, "EntryIo::Pad"),
@@ -105,7 +105,7 @@ pub enum Unpacked {
     Other,
 }
 
-impl<R: Read + Unpin> Entry<R> {
+impl<R: AsyncRead + Unpin> Entry<R> {
     /// Returns the path name for this entry.
     ///
     /// This method may fail if the pathname is not valid Unicode and this is
@@ -118,7 +118,7 @@ impl<R: Read + Unpin> Entry<R> {
     ///
     /// It is recommended to use this method instead of inspecting the `header`
     /// directly to ensure that various archive formats are handled correctly.
-    pub fn path(&self) -> io::Result<Cow<Path>> {
+    pub fn path(&self) -> io::Result<Cow<'_, Path>> {
         self.fields.path()
     }
 
@@ -128,7 +128,7 @@ impl<R: Read + Unpin> Entry<R> {
     /// separators, and it will not always return the same value as
     /// `self.header().path_bytes()` as some archive formats have support for
     /// longer path names described in separate entries.
-    pub fn path_bytes(&self) -> Cow<[u8]> {
+    pub fn path_bytes(&self) -> Cow<'_, [u8]> {
         self.fields.path_bytes()
     }
 
@@ -145,7 +145,7 @@ impl<R: Read + Unpin> Entry<R> {
     ///
     /// It is recommended to use this method instead of inspecting the `header`
     /// directly to ensure that various archive formats are handled correctly.
-    pub fn link_name(&self) -> io::Result<Option<Cow<Path>>> {
+    pub fn link_name(&self) -> io::Result<Option<Cow<'_, Path>>> {
         self.fields.link_name()
     }
 
@@ -154,7 +154,7 @@ impl<R: Read + Unpin> Entry<R> {
     /// Note that this will not always return the same value as
     /// `self.header().link_name_bytes()` as some archive formats have support for
     /// longer path names described in separate entries.
-    pub fn link_name_bytes(&self) -> Option<Cow<[u8]>> {
+    pub fn link_name_bytes(&self) -> Option<Cow<'_, [u8]>> {
         self.fields.link_name_bytes()
     }
 
@@ -226,11 +226,11 @@ impl<R: Read + Unpin> Entry<R> {
     /// # Examples
     ///
     /// ```no_run
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
-    /// use async_std::fs::File;
-    /// use async_std::prelude::*;
+    /// use smol::fs::File;
     /// use async_tar::Archive;
+    /// use smol::stream::StreamExt;
     ///
     /// let mut ar = Archive::new(File::open("foo.tar").await?);
     /// let mut entries = ar.entries()?;
@@ -261,11 +261,11 @@ impl<R: Read + Unpin> Entry<R> {
     /// # Examples
     ///
     /// ```no_run
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
-    /// use async_std::fs::File;
+    /// use smol::fs::File;
     /// use async_tar::Archive;
-    /// use async_std::prelude::*;
+    /// use smol::stream::StreamExt;
     ///
     /// let mut ar = Archive::new(File::open("foo.tar").await?);
     /// let mut entries = ar.entries()?;
@@ -311,7 +311,7 @@ impl<R: Read + Unpin> Entry<R> {
     }
 }
 
-impl<R: Read + Unpin> Read for Entry<R> {
+impl<R: AsyncRead + Unpin> AsyncRead for Entry<R> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -322,7 +322,7 @@ impl<R: Read + Unpin> Read for Entry<R> {
     }
 }
 
-impl<R: Read + Unpin> EntryFields<R> {
+impl<R: AsyncRead + Unpin> EntryFields<R> {
     pub fn from(entry: Entry<R>) -> Self {
         entry.fields
     }
@@ -343,7 +343,7 @@ impl<R: Read + Unpin> EntryFields<R> {
         let mut buf = Vec::with_capacity(cap as usize);
 
         // Copied from futures::ReadToEnd
-        match async_std::task::ready!(poll_read_all_internal(self, cx, &mut buf)) {
+        match smol::ready!(poll_read_all_internal(self, cx, &mut buf)) {
             Ok(_) => Poll::Ready(Ok(buf)),
             Err(err) => Poll::Ready(Err(err)),
         }
@@ -360,7 +360,7 @@ impl<R: Read + Unpin> EntryFields<R> {
         bytes2path(self.path_bytes())
     }
 
-    fn path_bytes(&self) -> Cow<[u8]> {
+    fn path_bytes(&self) -> Cow<'_, [u8]> {
         if let Some(ref bytes) = self.long_pathname {
             if let Some(&0) = bytes.last() {
                 Cow::Borrowed(&bytes[..bytes.len() - 1])
@@ -386,14 +386,14 @@ impl<R: Read + Unpin> EntryFields<R> {
         String::from_utf8_lossy(&self.path_bytes()).to_string()
     }
 
-    fn link_name(&self) -> io::Result<Option<Cow<Path>>> {
+    fn link_name(&self) -> io::Result<Option<Cow<'_, Path>>> {
         match self.link_name_bytes() {
             Some(bytes) => bytes2path(bytes).map(Some),
             None => Ok(None),
         }
     }
 
-    fn link_name_bytes(&self) -> Option<Cow<[u8]>> {
+    fn link_name_bytes(&self) -> Option<Cow<'_, [u8]>> {
         match self.long_linkname {
             Some(ref bytes) => {
                 if let Some(&0) = bytes.last() {
@@ -590,7 +590,7 @@ impl<R: Read + Unpin> EntryFields<R> {
 
             #[cfg(any(unix, target_os = "redox"))]
             async fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
-                async_std::os::unix::fs::symlink(src, dst).await
+                smol::fs::unix::symlink(src, dst).await
             }
         } else if kind.is_pax_global_extensions()
             || kind.is_pax_local_extensions()
@@ -763,7 +763,7 @@ impl<R: Read + Unpin> EntryFields<R> {
         }
 
         #[cfg(all(unix, feature = "xattr"))]
-        async fn set_xattrs<R: Read + Unpin>(
+        async fn set_xattrs<R: AsyncRead + Unpin>(
             me: &mut EntryFields<R>,
             dst: &Path,
         ) -> io::Result<()> {
@@ -812,7 +812,10 @@ impl<R: Read + Unpin> EntryFields<R> {
             not(feature = "xattr"),
             target_arch = "wasm32"
         ))]
-        async fn set_xattrs<R: Read + Unpin>(_: &mut EntryFields<R>, _: &Path) -> io::Result<()> {
+        async fn set_xattrs<R: AsyncRead + Unpin>(
+            _: &mut EntryFields<R>,
+            _: &Path,
+        ) -> io::Result<()> {
             Ok(())
         }
     }
@@ -820,7 +823,7 @@ impl<R: Read + Unpin> EntryFields<R> {
     async fn ensure_dir_created(&self, dst: &Path, dir: &Path) -> io::Result<()> {
         let mut ancestor = dir;
         let mut dirs_to_create = Vec::new();
-        while ancestor.symlink_metadata().await.is_err() {
+        while smol::fs::symlink_metadata(ancestor).await.is_err() {
             dirs_to_create.push(ancestor);
             if let Some(parent) = ancestor.parent() {
                 ancestor = parent;
@@ -839,13 +842,13 @@ impl<R: Read + Unpin> EntryFields<R> {
 
     async fn validate_inside_dst(&self, dst: &Path, file_dst: &Path) -> io::Result<PathBuf> {
         // Abort if target (canonical) parent is outside of `dst`
-        let canon_parent = file_dst.canonicalize().await.map_err(|err| {
+        let canon_parent = smol::fs::canonicalize(file_dst).await.map_err(|err| {
             Error::new(
                 err.kind(),
                 format!("{} while canonicalizing {}", err, file_dst.display()),
             )
         })?;
-        let canon_target = dst.canonicalize().await.map_err(|err| {
+        let canon_target = smol::fs::canonicalize(dst).await.map_err(|err| {
             Error::new(
                 err.kind(),
                 format!("{} while canonicalizing {}", err, dst.display()),
@@ -857,8 +860,7 @@ impl<R: Read + Unpin> EntryFields<R> {
                     "trying to unpack outside of destination path: {}",
                     canon_target.display()
                 ),
-                // TODO: use ErrorKind::InvalidInput here? (minor breaking change)
-                Error::new(ErrorKind::Other, "Invalid argument"),
+                Error::new(ErrorKind::InvalidInput, "Invalid argument"),
             );
             return Err(err.into());
         }
@@ -866,7 +868,7 @@ impl<R: Read + Unpin> EntryFields<R> {
     }
 }
 
-impl<R: Read + Unpin> Read for EntryFields<R> {
+impl<R: AsyncRead + Unpin> AsyncRead for EntryFields<R> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -910,7 +912,7 @@ impl<R: Read + Unpin> Read for EntryFields<R> {
     }
 }
 
-impl<R: Read + Unpin> Read for EntryIo<R> {
+impl<R: AsyncRead + Unpin> AsyncRead for EntryIo<R> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -936,7 +938,7 @@ impl Drop for Guard<'_> {
     }
 }
 
-fn poll_read_all_internal<R: Read + ?Sized>(
+fn poll_read_all_internal<R: AsyncRead + ?Sized>(
     mut rd: Pin<&mut R>,
     cx: &mut Context<'_>,
     buf: &mut Vec<u8>,
@@ -958,7 +960,7 @@ fn poll_read_all_internal<R: Read + ?Sized>(
             }
         }
 
-        match async_std::task::ready!(rd.as_mut().poll_read(cx, &mut g.buf[g.len..])) {
+        match smol::ready!(rd.as_mut().poll_read(cx, &mut g.buf[g.len..])) {
             Ok(0) => {
                 ret = Poll::Ready(Ok(g.len));
                 break;
