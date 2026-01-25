@@ -1,6 +1,8 @@
-#[cfg(feature = "runtime-async-std")]
-use async_std::fs::File;
 use async_tar::Builder;
+
+#[cfg(feature = "runtime-smol")]
+use smol::fs::File;
+
 #[cfg(feature = "runtime-tokio")]
 use tokio::fs::File;
 
@@ -14,9 +16,9 @@ async fn inner_main() {
         .unwrap();
 }
 
-#[cfg(feature = "runtime-async-std")]
+#[cfg(feature = "runtime-smol")]
 fn main() {
-    async_std::task::block_on(inner_main());
+    smol::block_on(inner_main());
 }
 
 #[cfg(feature = "runtime-tokio")]

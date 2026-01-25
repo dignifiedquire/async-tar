@@ -4,38 +4,52 @@
 //! name as the first argument provided, and then prints the contents of that
 //! file to stdout.
 
-#[cfg(feature = "runtime-async-std")]
-use async_std::{
-    io::{copy, stdin, stdout},
-    path::Path,
-    stream::StreamExt,
-};
-use std::env::args_os;
-#[cfg(feature = "runtime-tokio")]
-use std::path::Path;
-#[cfg(feature = "runtime-tokio")]
-use tokio::io::{copy, stdin, stdout};
-#[cfg(feature = "runtime-tokio")]
-use tokio_stream::StreamExt;
-
 use async_tar::Archive;
+
+use std::env::args_os;
+use std::path::Path;
+
+#[cfg(feature = "runtime-smol")]
+use {
+    smol::{Unblock, io::copy, stream::StreamExt},
+    std::io::{stdin, stdout},
+};
+
+#[cfg(feature = "runtime-tokio")]
+use {
+    tokio::io::{copy, stdin, stdout},
+    tokio_stream::StreamExt,
+};
 
 async fn inner_main() {
     let first_arg = args_os().nth(1).unwrap();
     let filename = Path::new(&first_arg);
-    let ar = Archive::new(stdin());
+
+    #[cfg(feature = "runtime-smol")]
+    let stdin = Unblock::new(stdin());
+
+    #[cfg(feature = "runtime-smol")]
+    let mut stdout = Unblock::new(stdout());
+
+    #[cfg(feature = "runtime-tokio")]
+    let stdin = stdin();
+
+    #[cfg(feature = "runtime-tokio")]
+    let mut stdout = stdout();
+
+    let ar = Archive::new(stdin);
     let mut entries = ar.entries().unwrap();
     while let Some(file) = entries.next().await {
         let mut f = file.unwrap();
         if f.path().unwrap() == filename {
-            copy(&mut f, &mut stdout()).await.unwrap();
+            copy(&mut f, &mut stdout).await.unwrap();
         }
     }
 }
 
-#[cfg(feature = "runtime-async-std")]
+#[cfg(feature = "runtime-smol")]
 fn main() {
-    async_std::task::block_on(inner_main());
+    smol::block_on(inner_main());
 }
 
 #[cfg(feature = "runtime-tokio")]

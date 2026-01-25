@@ -42,21 +42,24 @@
 
 ## Features
 
-- `runtime-async-std`: enabled by default, makes this crate compatible with `async-std`
+- `runtime-smol`: enabled by default, makes this crate compatible with `smol`
 - `runtime-tokio`: makes this crate compatible with `tokio`
 
 > **Note**: These features are mutually exclusive. Enable only one runtime feature.
+The async-std runtime was replaced with smol since async-std is discontinued
 
 ## Reading an archive
 
 ```rust,no_run
-use async_std::io::stdin;
-use async_std::prelude::*;
+use smol::Unblock;
+use smol::stream::StreamExt;
+use std::io::stdin;
+
 use async_tar::Archive;
 
 fn main() {
-    async_std::task::block_on(async {
-        let mut ar = Archive::new(stdin());
+    smol::block_on(async {
+        let mut ar = Archive::new(Unblock::new(stdin()));
         let mut entries = ar.entries().unwrap();
         while let Some(file) = entries.next().await {
             let f = file.unwrap();
@@ -69,11 +72,11 @@ fn main() {
 ## Writing an archive
 
 ```rust,no_run
-use async_std::fs::File;
+use smol::fs::File;
 use async_tar::Builder;
 
 fn main() {
-    async_std::task::block_on(async {
+    smol::block_on(async {
         let file = File::create("foo.tar").await.unwrap();
         let mut a = Builder::new(file);
 
@@ -97,9 +100,9 @@ Minimal stable rust version: 1.85
 This project is licensed under either of
 
  * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or
-   http://www.apache.org/licenses/LICENSE-2.0)
+   <http://www.apache.org/licenses/LICENSE-2.0>)
  * MIT license ([LICENSE-MIT](LICENSE-MIT) or
-   http://opensource.org/licenses/MIT)
+   <http://opensource.org/licenses/MIT>)
 
 at your option.
 

@@ -1,11 +1,11 @@
+use crate::error::other;
 use std::{slice, str};
 
-#[cfg(feature = "runtime-async-std")]
-use async_std::io;
+#[cfg(feature = "runtime-smol")]
+use smol::io;
+
 #[cfg(feature = "runtime-tokio")]
 use tokio::io;
-
-use crate::other;
 
 /// An iterator over the pax extensions in an archive entry.
 ///

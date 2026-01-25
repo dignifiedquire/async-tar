@@ -1,7 +1,7 @@
 use std::{error, fmt};
 
-#[cfg(feature = "runtime-async-std")]
-use async_std::io::{self, Error};
+#[cfg(feature = "runtime-smol")]
+use smol::io::{self, Error};
 #[cfg(feature = "runtime-tokio")]
 use tokio::io::{self, Error};
 
@@ -40,4 +40,8 @@ impl From<TarError> for Error {
     fn from(t: TarError) -> Error {
         Error::new(t.io.kind(), t)
     }
+}
+
+pub(crate) fn other(msg: &str) -> Error {
+    std::io::Error::other(msg)
 }

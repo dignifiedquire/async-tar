@@ -1,29 +1,20 @@
 #[cfg(any(unix, target_os = "redox"))]
 use std::os::unix::prelude::*;
+
 #[cfg(windows)]
 use std::os::windows::prelude::*;
 
+use std::path::{Component, Path, PathBuf};
 use std::{borrow::Cow, fmt, iter, iter::repeat, iter::repeat_n, mem, str};
 
-#[cfg(all(windows, feature = "runtime-async-std"))]
-use async_std::fs;
-#[cfg(feature = "runtime-async-std")]
-use async_std::{
-    fs::Metadata,
-    io,
-    path::{Component, Path, PathBuf},
-};
-#[cfg(feature = "runtime-tokio")]
-use std::{
-    fs::Metadata,
-    path::{Component, Path, PathBuf},
-};
-#[cfg(all(windows, feature = "runtime-tokio"))]
-use tokio::fs;
+#[cfg(feature = "runtime-smol")]
+use smol::io;
+
 #[cfg(feature = "runtime-tokio")]
 use tokio::io;
 
-use crate::{EntryType, other};
+use crate::{EntryType, error::other};
+use std::fs::Metadata;
 
 /// Representation of the header of an entry in an archive
 #[repr(C)]
@@ -734,7 +725,7 @@ impl Header {
 
     #[cfg(target_arch = "wasm32")]
     #[allow(unused_variables)]
-    fn fill_platform_from(&mut self, meta: &fs::Metadata, mode: HeaderMode) {
+    fn fill_platform_from(&mut self, meta: &Metadata, mode: HeaderMode) {
         unimplemented!();
     }
 
@@ -1594,7 +1585,7 @@ fn ends_with_slash(p: &Path) -> bool {
 }
 
 #[cfg(any(windows, target_arch = "wasm32"))]
-pub fn path2bytes(p: &Path) -> io::Result<Cow<[u8]>> {
+pub fn path2bytes(p: &Path) -> io::Result<Cow<'_, [u8]>> {
     p.as_os_str()
         .to_str()
         .map(|s| s.as_bytes())
@@ -1624,7 +1615,7 @@ pub fn path2bytes(p: &Path) -> io::Result<Cow<'_, [u8]>> {
 #[cfg(windows)]
 /// On windows we cannot accept non-Unicode bytes because it
 /// is impossible to convert it to UTF-16.
-pub fn bytes2path(bytes: Cow<[u8]>) -> io::Result<Cow<Path>> {
+pub fn bytes2path(bytes: Cow<'_, [u8]>) -> io::Result<Cow<'_, Path>> {
     return match bytes {
         Cow::Borrowed(bytes) => {
             let s = str::from_utf8(bytes).map_err(|_| not_unicode(bytes))?;
@@ -1656,7 +1647,7 @@ pub fn bytes2path(bytes: Cow<'_, [u8]>) -> io::Result<Cow<'_, Path>> {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn bytes2path(bytes: Cow<[u8]>) -> io::Result<Cow<Path>> {
+pub fn bytes2path(bytes: Cow<'_, [u8]>) -> io::Result<Cow<'_, Path>> {
     Ok(match bytes {
         Cow::Borrowed(bytes) => {
             Cow::Borrowed({ Path::new(str::from_utf8(bytes).map_err(invalid_utf8)?) })
