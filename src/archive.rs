@@ -1,5 +1,6 @@
-#[cfg(feature = "runtime-tokio")]
 use std::path::Path;
+use std::task::ready;
+
 use std::{
     cmp,
     pin::Pin,
@@ -7,18 +8,19 @@ use std::{
     task::{Context, Poll},
 };
 
-#[cfg(feature = "runtime-async-std")]
-use async_std::{
+//use core::task::{Context, Poll};
+
+#[cfg(feature = "runtime-smol")]
+use smol::{
     fs, io,
-    io::prelude::*,
-    path::Path,
+    io::{AsyncRead, AsyncReadExt},
     stream::{Stream, StreamExt},
 };
-use futures_core::ready;
+
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
     fs,
-    io::{self, AsyncRead as Read, AsyncReadExt},
+    io::{self, AsyncRead, AsyncReadExt},
 };
 #[cfg(feature = "runtime-tokio")]
 use tokio_stream::{Stream, StreamExt};
@@ -26,21 +28,19 @@ use tokio_stream::{Stream, StreamExt};
 use crate::{
     Entry, GnuExtSparseHeader, GnuSparseHeader, Header,
     entry::{EntryFields, EntryIo},
-    error::TarError,
-    fs_canonicalize, other,
+    error::{TarError, other},
     pax::pax_extensions,
-    symlink_metadata,
 };
 
 /// A top-level representation of an archive file.
 ///
 /// This archive can have an entry added to it and it can be iterated over.
 #[derive(Debug)]
-pub struct Archive<R: Read + Unpin> {
+pub struct Archive<R: AsyncRead + Unpin> {
     inner: Arc<Mutex<ArchiveInner<R>>>,
 }
 
-impl<R: Read + Unpin> Clone for Archive<R> {
+impl<R: AsyncRead + Unpin> Clone for Archive<R> {
     fn clone(&self) -> Self {
         Archive {
             inner: self.inner.clone(),
@@ -49,7 +49,7 @@ impl<R: Read + Unpin> Clone for Archive<R> {
 }
 
 #[derive(Debug)]
-pub struct ArchiveInner<R: Read + Unpin> {
+pub struct ArchiveInner<R: AsyncRead + Unpin> {
     pos: u64,
     unpack_xattrs: bool,
     preserve_permissions: bool,
@@ -59,7 +59,7 @@ pub struct ArchiveInner<R: Read + Unpin> {
 }
 
 /// Configure the archive.
-pub struct ArchiveBuilder<R: Read + Unpin> {
+pub struct ArchiveBuilder<R: AsyncRead + Unpin> {
     obj: R,
     unpack_xattrs: bool,
     preserve_permissions: bool,
@@ -67,7 +67,7 @@ pub struct ArchiveBuilder<R: Read + Unpin> {
     ignore_zeros: bool,
 }
 
-impl<R: Read + Unpin> ArchiveBuilder<R> {
+impl<R: AsyncRead + Unpin> ArchiveBuilder<R> {
     /// Create a new builder.
     pub fn new(obj: R) -> Self {
         ArchiveBuilder {
@@ -142,7 +142,7 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
     }
 }
 
-impl<R: Read + Unpin> Archive<R> {
+impl<R: AsyncRead + Unpin> Archive<R> {
     /// Create a new archive with the underlying object as the reader.
     pub fn new(obj: R) -> Archive<R> {
         Archive {
@@ -221,11 +221,11 @@ impl<R: Read + Unpin> Archive<R> {
     ///
     /// # Examples
     ///
-    #[cfg_attr(feature = "runtime-async-std", doc = "```no_run")]
+    #[cfg_attr(feature = "runtime-smol", doc = "```no_run")]
     #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
-    /// use async_std::fs::File;
+    /// use smol::fs::File;
     /// use async_tar::Archive;
     ///
     /// let mut ar = Archive::new(File::open("foo.tar").await?);
@@ -236,9 +236,10 @@ impl<R: Read + Unpin> Archive<R> {
     pub async fn unpack<P: AsRef<Path>>(self, dst: P) -> io::Result<()> {
         let mut entries = self.entries()?;
         let mut pinned = Pin::new(&mut entries);
+
         let dst = dst.as_ref();
 
-        if symlink_metadata(dst).await.is_err() {
+        if fs::symlink_metadata(dst).await.is_err() {
             fs::create_dir_all(&dst)
                 .await
                 .map_err(|e| TarError::new(&format!("failed to create `{}`", dst.display()), e))?;
@@ -249,8 +250,7 @@ impl<R: Read + Unpin> Archive<R> {
         // extended-length path with a 32,767 character limit. Otherwise all
         // unpacked paths over 260 characters will fail on creation with a
         // NotFound exception.
-
-        let dst = &fs_canonicalize(dst)
+        let dst = fs::canonicalize(dst)
             .await
             .unwrap_or_else(|_| dst.to_path_buf());
 
@@ -263,11 +263,11 @@ impl<R: Read + Unpin> Archive<R> {
             if file.header().entry_type() == crate::EntryType::Directory {
                 directories.push(file);
             } else {
-                file.unpack_in(dst).await?;
+                file.unpack_in(&dst).await?;
             }
         }
         for mut dir in directories {
-            dir.unpack_in(dst).await?;
+            dir.unpack_in(&dst).await?;
         }
 
         Ok(())
@@ -285,7 +285,7 @@ struct State {
 
 /// Stream of `Entry`s.
 #[derive(Debug)]
-pub struct Entries<R: Read + Unpin> {
+pub struct Entries<R: AsyncRead + Unpin> {
     archive: Archive<R>,
     current: State,
     fields: Option<EntryFields<Archive<R>>>,
@@ -313,7 +313,7 @@ macro_rules! ready_err {
     };
 }
 
-impl<R: Read + Unpin> Stream for Entries<R> {
+impl<R: AsyncRead + Unpin> Stream for Entries<R> {
     type Item = io::Result<Entry<Archive<R>>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -414,12 +414,12 @@ impl<R: Read + Unpin> Stream for Entries<R> {
 }
 
 /// Stream of raw `Entry`s.
-pub struct RawEntries<R: Read + Unpin> {
+pub struct RawEntries<R: AsyncRead + Unpin> {
     archive: Archive<R>,
     current: (u64, Option<Header>, usize),
 }
 
-impl<R: Read + Unpin> Stream for RawEntries<R> {
+impl<R: AsyncRead + Unpin> Stream for RawEntries<R> {
     type Item = io::Result<Entry<Archive<R>>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -429,7 +429,7 @@ impl<R: Read + Unpin> Stream for RawEntries<R> {
     }
 }
 
-fn poll_next_raw<R: Read + Unpin>(
+fn poll_next_raw<R: AsyncRead + Unpin>(
     archive: &Archive<R>,
     next: &mut u64,
     current_header: &mut Option<Header>,
@@ -587,7 +587,7 @@ fn poll_next_raw<R: Read + Unpin>(
     Poll::Ready(Some(Ok(ret.into_entry())))
 }
 
-fn poll_parse_sparse_header<R: Read + Unpin>(
+fn poll_parse_sparse_header<R: AsyncRead + Unpin>(
     archive: &Archive<R>,
     next: &mut u64,
     current_ext: &mut Option<GnuExtSparseHeader>,
@@ -712,9 +712,11 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
 
     Poll::Ready(Ok(()))
 }
+// Perhaps https://docs.rs/async-compat/latest/async_compat/
+// could be used?
 
-#[cfg(feature = "runtime-async-std")]
-impl<R: Read + Unpin> Read for Archive<R> {
+#[cfg(feature = "runtime-smol")]
+impl<R: AsyncRead + Unpin> AsyncRead for Archive<R> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -736,7 +738,7 @@ impl<R: Read + Unpin> Read for Archive<R> {
 }
 
 #[cfg(feature = "runtime-tokio")]
-impl<R: Read + Unpin> Read for Archive<R> {
+impl<R: AsyncRead + Unpin> AsyncRead for Archive<R> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -762,8 +764,8 @@ impl<R: Read + Unpin> Read for Archive<R> {
 ///
 /// If the reader reaches its end before filling the buffer at all, returns `false`.
 /// Otherwise returns `true`.
-#[cfg(feature = "runtime-async-std")]
-fn poll_try_read_all<R: Read + Unpin>(
+#[cfg(feature = "runtime-smol")]
+fn poll_try_read_all<R: AsyncRead + Unpin>(
     mut source: R,
     cx: &mut Context<'_>,
     buf: &mut [u8],
@@ -788,7 +790,7 @@ fn poll_try_read_all<R: Read + Unpin>(
 }
 
 #[cfg(feature = "runtime-tokio")]
-fn poll_try_read_all<R: Read + Unpin>(
+fn poll_try_read_all<R: AsyncRead + Unpin>(
     mut source: R,
     cx: &mut Context<'_>,
     buf: &mut [u8],
@@ -819,8 +821,8 @@ fn poll_try_read_all<R: Read + Unpin>(
 }
 
 /// Skip n bytes on the given source.
-#[cfg(feature = "runtime-async-std")]
-fn poll_skip<R: Read + Unpin>(
+#[cfg(feature = "runtime-smol")]
+fn poll_skip<R: AsyncRead + Unpin>(
     mut source: R,
     cx: &mut Context<'_>,
     mut amt: u64,
@@ -844,7 +846,7 @@ fn poll_skip<R: Read + Unpin>(
 
 /// Skip n bytes on the given source.
 #[cfg(feature = "runtime-tokio")]
-fn poll_skip<R: Read + Unpin>(
+fn poll_skip<R: AsyncRead + Unpin>(
     mut source: R,
     cx: &mut Context<'_>,
     mut amt: u64,

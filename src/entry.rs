@@ -1,47 +1,50 @@
 use std::{
     borrow::Cow,
     cmp, fmt, marker,
+    path::{Component, Path, PathBuf},
     pin::Pin,
-    task::{Context, Poll},
+    task::{Context, Poll, ready},
 };
 
-#[cfg(feature = "runtime-async-std")]
-use async_std::{
+#[cfg(feature = "runtime-smol")]
+use smol::{
     fs,
-    fs::{OpenOptions, Permissions},
-    io::{self, Error, ErrorKind, SeekFrom, prelude::*},
-    path::{Component, Path, PathBuf},
+    fs::OpenOptions,
+    io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, Error, ErrorKind, SeekFrom},
 };
-use futures_core::ready;
-#[cfg(all(unix, feature = "runtime-tokio"))]
-use std::fs::Permissions;
-#[cfg(feature = "runtime-tokio")]
-use std::path::{Component, Path, PathBuf};
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
     fs,
     fs::OpenOptions,
-    io::{self, AsyncRead as Read, AsyncReadExt, AsyncSeekExt, Error, ErrorKind, SeekFrom},
+    io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, Error, ErrorKind, SeekFrom},
 };
+
+#[cfg(all(unix, feature = "runtime-smol"))]
+use smol::fs::Permissions;
+
+#[cfg(all(unix, feature = "runtime-tokio"))]
+use std::fs::Permissions;
 
 use filetime::{self, FileTime};
 
 use crate::{
-    Archive, Header, PaxExtensions, error::TarError, fs_canonicalize, header::bytes2path, other,
-    pax::pax_extensions, symlink_metadata,
+    Archive, Header, PaxExtensions,
+    error::{TarError, other},
+    header::bytes2path,
+    pax::pax_extensions,
 };
 
 /// A read-only view into an entry of an archive.
 ///
 /// This structure is a window into a portion of a borrowed archive which can
-/// be inspected. It acts as a file handle by implementing the Reader trait. An
+/// be inspected. It acts as a file handle by implementing the AsyncRead trait. An
 /// entry cannot be rewritten once inserted into an archive.
-pub struct Entry<R: Read + Unpin> {
+pub struct Entry<R: AsyncRead + Unpin> {
     fields: EntryFields<R>,
     _ignored: marker::PhantomData<Archive<R>>,
 }
 
-impl<R: Read + Unpin> fmt::Debug for Entry<R> {
+impl<R: AsyncRead + Unpin> fmt::Debug for Entry<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Entry")
             .field("fields", &self.fields)
@@ -51,7 +54,7 @@ impl<R: Read + Unpin> fmt::Debug for Entry<R> {
 
 // private implementation detail of `Entry`, but concrete (no type parameters)
 // and also all-public to be constructed from other modules.
-pub struct EntryFields<R: Read + Unpin> {
+pub struct EntryFields<R: AsyncRead + Unpin> {
     pub long_pathname: Option<Vec<u8>>,
     pub long_linkname: Option<Vec<u8>>,
     pub pax_extensions: Option<Vec<u8>>,
@@ -66,7 +69,7 @@ pub struct EntryFields<R: Read + Unpin> {
     pub(crate) read_state: Option<EntryIo<R>>,
 }
 
-impl<R: Read + Unpin> fmt::Debug for EntryFields<R> {
+impl<R: AsyncRead + Unpin> fmt::Debug for EntryFields<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EntryFields")
             .field("long_pathname", &self.long_pathname)
@@ -85,12 +88,12 @@ impl<R: Read + Unpin> fmt::Debug for EntryFields<R> {
     }
 }
 
-pub enum EntryIo<R: Read + Unpin> {
+pub enum EntryIo<R: AsyncRead + Unpin> {
     Pad(io::Take<io::Repeat>),
     Data(io::Take<R>),
 }
 
-impl<R: Read + Unpin> fmt::Debug for EntryIo<R> {
+impl<R: AsyncRead + Unpin> fmt::Debug for EntryIo<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             EntryIo::Pad(_) => write!(f, "EntryIo::Pad"),
@@ -111,7 +114,7 @@ pub enum Unpacked {
     Other,
 }
 
-impl<R: Read + Unpin> Entry<R> {
+impl<R: AsyncRead + Unpin> Entry<R> {
     /// Returns the path name for this entry.
     ///
     /// This method may fail if the pathname is not valid Unicode and this is
@@ -231,13 +234,13 @@ impl<R: Read + Unpin> Entry<R> {
     ///
     /// # Examples
     ///
-    #[cfg_attr(feature = "runtime-async-std", doc = "```no_run")]
+    #[cfg_attr(feature = "runtime-smol", doc = "```no_run")]
     #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
-    /// use async_std::fs::File;
-    /// use async_std::prelude::*;
+    /// use smol::fs::File;
     /// use async_tar::Archive;
+    /// use smol::stream::StreamExt;
     ///
     /// let mut ar = Archive::new(File::open("foo.tar").await?);
     /// let mut entries = ar.entries()?;
@@ -267,13 +270,13 @@ impl<R: Read + Unpin> Entry<R> {
     ///
     /// # Examples
     ///
-    #[cfg_attr(feature = "runtime-async-std", doc = "```no_run")]
+    #[cfg_attr(feature = "runtime-smol", doc = "```no_run")]
     #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
-    /// use async_std::fs::File;
+    /// use smol::fs::File;
     /// use async_tar::Archive;
-    /// use async_std::prelude::*;
+    /// use smol::stream::StreamExt;
     ///
     /// let mut ar = Archive::new(File::open("foo.tar").await?);
     /// let mut entries = ar.entries()?;
@@ -319,8 +322,8 @@ impl<R: Read + Unpin> Entry<R> {
     }
 }
 
-#[cfg(feature = "runtime-async-std")]
-impl<R: Read + Unpin> Read for Entry<R> {
+#[cfg(feature = "runtime-smol")]
+impl<R: AsyncRead + Unpin> AsyncRead for Entry<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -331,7 +334,7 @@ impl<R: Read + Unpin> Read for Entry<R> {
 }
 
 #[cfg(feature = "runtime-tokio")]
-impl<R: Read + Unpin> Read for Entry<R> {
+impl<R: AsyncRead + Unpin> AsyncRead for Entry<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -341,7 +344,7 @@ impl<R: Read + Unpin> Read for Entry<R> {
     }
 }
 
-impl<R: Read + Unpin> EntryFields<R> {
+impl<R: AsyncRead + Unpin> EntryFields<R> {
     pub fn from(entry: Entry<R>) -> Self {
         entry.fields
     }
@@ -604,9 +607,14 @@ impl<R: Read + Unpin> EntryFields<R> {
 
             #[cfg(windows)]
             async fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
-                #[cfg(feature = "runtime-async-std")]
+                #[cfg(feature = "runtime-smol")]
                 {
-                    async_std::os::windows::fs::symlink_file(src, dst).await
+                    // does not exist in smol so we need to write it ourself
+                    // exactly the same as
+                    // https://docs.rs/async-std/latest/src/async_std/os/windows/fs.rs.html#51-55
+                    let src = src.to_owned();
+                    let dst = dst.to_owned();
+                    smol::unblock(move || std::os::windows::fs::symlink_file(&src, &dst)).await
                 }
                 #[cfg(feature = "runtime-tokio")]
                 {
@@ -614,10 +622,12 @@ impl<R: Read + Unpin> EntryFields<R> {
                 }
             }
 
+            // TODO: should we replace this since redox is inside the unix target family
+            // https://github.com/rust-lang/rust/pull/60547
             #[cfg(any(unix, target_os = "redox"))]
             async fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
-                #[cfg(feature = "runtime-async-std")]
-                async_std::os::unix::fs::symlink(src, dst).await?;
+                #[cfg(feature = "runtime-smol")]
+                smol::fs::unix::symlink(src, dst).await?;
                 #[cfg(feature = "runtime-tokio")]
                 tokio::fs::symlink(src, dst).await?;
 
@@ -790,11 +800,12 @@ impl<R: Read + Unpin> EntryFields<R> {
             mode: u32,
             _preserve: bool,
         ) -> io::Result<()> {
-            Err(io::Error::new(io::ErrorKind::Other, "Not implemented"))
+            Err(other("Not implemented"))
         }
 
-        #[cfg(all(unix, feature = "xattr"))]
-        async fn set_xattrs<R: Read + Unpin>(
+        // redox is part of the unix group but it does not support setxattrs
+        #[cfg(all(unix, feature = "xattr", not(target_os = "redox")))]
+        async fn set_xattrs<R: AsyncRead + Unpin>(
             me: &mut EntryFields<R>,
             dst: &Path,
         ) -> io::Result<()> {
@@ -843,7 +854,10 @@ impl<R: Read + Unpin> EntryFields<R> {
             not(feature = "xattr"),
             target_arch = "wasm32"
         ))]
-        async fn set_xattrs<R: Read + Unpin>(_: &mut EntryFields<R>, _: &Path) -> io::Result<()> {
+        async fn set_xattrs<R: AsyncRead + Unpin>(
+            _: &mut EntryFields<R>,
+            _: &Path,
+        ) -> io::Result<()> {
             Ok(())
         }
     }
@@ -851,8 +865,7 @@ impl<R: Read + Unpin> EntryFields<R> {
     async fn ensure_dir_created(&self, dst: &Path, dir: &Path) -> io::Result<()> {
         let mut ancestor = dir;
         let mut dirs_to_create = Vec::new();
-
-        while symlink_metadata(ancestor).await.is_err() {
+        while fs::symlink_metadata(ancestor).await.is_err() {
             dirs_to_create.push(ancestor);
             if let Some(parent) = ancestor.parent() {
                 ancestor = parent;
@@ -871,13 +884,13 @@ impl<R: Read + Unpin> EntryFields<R> {
 
     async fn validate_inside_dst(&self, dst: &Path, file_dst: &Path) -> io::Result<PathBuf> {
         // Abort if target (canonical) parent is outside of `dst`
-        let canon_parent = fs_canonicalize(file_dst).await.map_err(|err| {
+        let canon_parent = fs::canonicalize(file_dst).await.map_err(|err| {
             Error::new(
                 err.kind(),
                 format!("{} while canonicalizing {}", err, file_dst.display()),
             )
         })?;
-        let canon_target = fs_canonicalize(dst).await.map_err(|err| {
+        let canon_target = fs::canonicalize(dst).await.map_err(|err| {
             Error::new(
                 err.kind(),
                 format!("{} while canonicalizing {}", err, dst.display()),
@@ -889,8 +902,7 @@ impl<R: Read + Unpin> EntryFields<R> {
                     "trying to unpack outside of destination path: {}",
                     canon_target.display()
                 ),
-                // TODO: use ErrorKind::InvalidInput here? (minor breaking change)
-                Error::other("Invalid argument"),
+                Error::new(ErrorKind::InvalidInput, "Invalid argument"),
             );
             return Err(err.into());
         }
@@ -898,8 +910,8 @@ impl<R: Read + Unpin> EntryFields<R> {
     }
 }
 
-#[cfg(feature = "runtime-async-std")]
-impl<R: Read + Unpin> Read for EntryFields<R> {
+#[cfg(feature = "runtime-smol")]
+impl<R: AsyncRead + Unpin> AsyncRead for EntryFields<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -942,7 +954,7 @@ impl<R: Read + Unpin> Read for EntryFields<R> {
 }
 
 #[cfg(feature = "runtime-tokio")]
-impl<R: Read + Unpin> Read for EntryFields<R> {
+impl<R: AsyncRead + Unpin> AsyncRead for EntryFields<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -987,8 +999,8 @@ impl<R: Read + Unpin> Read for EntryFields<R> {
     }
 }
 
-#[cfg(feature = "runtime-async-std")]
-impl<R: Read + Unpin> Read for EntryIo<R> {
+#[cfg(feature = "runtime-smol")]
+impl<R: AsyncRead + Unpin> AsyncRead for EntryIo<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -1002,7 +1014,7 @@ impl<R: Read + Unpin> Read for EntryIo<R> {
 }
 
 #[cfg(feature = "runtime-tokio")]
-impl<R: Read + Unpin> Read for EntryIo<R> {
+impl<R: AsyncRead + Unpin> AsyncRead for EntryIo<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -1028,8 +1040,8 @@ impl Drop for Guard<'_> {
     }
 }
 
-#[cfg(feature = "runtime-async-std")]
-fn poll_read_all_internal<R: Read + ?Sized>(
+#[cfg(feature = "runtime-smol")]
+fn poll_read_all_internal<R: AsyncRead + ?Sized>(
     mut rd: Pin<&mut R>,
     cx: &mut Context<'_>,
     buf: &mut Vec<u8>,
@@ -1068,7 +1080,7 @@ fn poll_read_all_internal<R: Read + ?Sized>(
 }
 
 #[cfg(feature = "runtime-tokio")]
-fn poll_read_all_internal<R: Read + ?Sized>(
+fn poll_read_all_internal<R: AsyncRead + ?Sized>(
     mut rd: Pin<&mut R>,
     cx: &mut Context<'_>,
     buf: &mut Vec<u8>,
@@ -1108,6 +1120,5 @@ fn poll_read_all_internal<R: Read + ?Sized>(
             }
         }
     }
-
     ret
 }

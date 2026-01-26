@@ -16,19 +16,18 @@
 //     it. To that end lots of work is done to ensure that concrete
 //     implementations are all found in this crate and the generic functions are
 //     all just super thin wrappers (e.g. easy to codegen).
+//
 
 #![deny(missing_docs)]
 #![deny(clippy::all)]
 
-#[cfg(all(feature = "runtime-async-std", feature = "runtime-tokio"))]
+#[cfg(all(feature = "runtime-smol", feature = "runtime-tokio"))]
 compile_error!(
-    "Features `runtime-async-std` and `runtime-tokio` are mutually exclusive. Please enable only one."
+    "Features `runtime-smol` and `runtime-tokio` are mutually exclusive. Please enable only one by setting `default-features = false` in your Cargo.toml."
 );
 
-#[cfg(not(any(feature = "runtime-async-std", feature = "runtime-tokio")))]
-compile_error!("Either `runtime-async-std` or `runtime-tokio` feature must be enabled.");
-
-use std::io::Error;
+#[cfg(not(any(feature = "runtime-smol", feature = "runtime-tokio")))]
+compile_error!("Either `runtime-smol` or `runtime-tokio` feature must be enabled.");
 
 pub use crate::{
     archive::{Archive, ArchiveBuilder, Entries},
@@ -53,39 +52,9 @@ mod pax;
 #[macro_use]
 extern crate static_assertions;
 
-fn other(msg: &str) -> Error {
-    Error::other(msg)
-}
-
-#[cfg(feature = "runtime-async-std")]
-pub(crate) async fn fs_canonicalize(
-    path: &async_std::path::Path,
-) -> async_std::io::Result<async_std::path::PathBuf> {
-    path.canonicalize().await
-}
-#[cfg(feature = "runtime-tokio")]
-pub(crate) async fn fs_canonicalize(
-    path: &std::path::Path,
-) -> tokio::io::Result<std::path::PathBuf> {
-    tokio::fs::canonicalize(path).await
-}
-
-#[cfg(feature = "runtime-async-std")]
-async fn symlink_metadata(
-    p: &async_std::path::Path,
-) -> async_std::io::Result<async_std::fs::Metadata> {
-    p.symlink_metadata().await
-}
-#[cfg(feature = "runtime-tokio")]
-async fn symlink_metadata(p: &std::path::Path) -> tokio::io::Result<std::fs::Metadata> {
-    tokio::fs::symlink_metadata(p).await
-}
-
-#[cfg(feature = "runtime-async-std")]
-async fn metadata(p: &async_std::path::Path) -> async_std::io::Result<async_std::fs::Metadata> {
-    p.metadata().await
-}
-#[cfg(feature = "runtime-tokio")]
-async fn metadata(p: &std::path::Path) -> tokio::io::Result<std::fs::Metadata> {
-    tokio::fs::metadata(p).await
-}
+#[cfg(feature = "runtime-smol")]
+#[doc = include_str!("../README.md")]
+// This allows the README to be tested via `cargo test`,
+// but still not appearing in the HTML documentation
+#[doc(hidden)]
+mod readme_examples {}

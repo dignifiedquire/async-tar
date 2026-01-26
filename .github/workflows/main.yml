@@ -37,8 +37,8 @@ jobs:
           toolchain: ${{ matrix.rust }}
       - run: cargo test --no-default-features --features runtime-tokio
 
-  check_async:
-    name: Test async-std
+  check_smol:
+    name: Test smol
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -64,7 +64,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
-      - run: cargo test --no-default-features --features runtime-async-std
+      - run: cargo test --no-default-features --features runtime-smol
 
   fmt:
     name: Check formatting
@@ -86,15 +86,15 @@ jobs:
           components: clippy
       - run: cargo clippy --no-default-features --features runtime-tokio -- -D warnings
 
-  lint_async:
-    name: Clippy async-std
+  lint_smol:
+    name: Clippy smol
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - run: cargo clippy --no-default-features --features runtime-async-std -- -D warnings
+      - run: cargo clippy --no-default-features --features runtime-smol -- -D warnings
 
   docs:
     name: Check docs
