@@ -392,6 +392,9 @@ impl<R: Read + Unpin> Stream for Entries<R> {
             new_fields.long_pathname = gnu_longname.take();
             new_fields.long_linkname = gnu_longlink.take();
             new_fields.pax_extensions = pax_extensions.take();
+            // these pax records apply to this entry only; clear the sizing copy
+            // so it doesn't leak onto the next entry
+            *current_pax_extensions = None;
 
             let State {
                 next,
@@ -503,9 +506,20 @@ fn poll_next_raw<R: Read + Unpin>(
     // when pax extensions are available, the size should come from there.
     let mut size = header.entry_size()?;
 
+    // PAX extension records describe the next *file entry*, not an intermediary
+    // extension header. Applying a buffered PAX `size` (or uid/gid) to a GNU
+    // longname/longlink (`L`/`K`) or a PAX local/global (`x`/`g`) header would
+    // advance the stream cursor by the wrong amount and desync the parse, since
+    // those headers' body length must come from their own declared size.
+    let entry_type = header.entry_type();
+    let is_extension_header = entry_type.is_gnu_longname()
+        || entry_type.is_gnu_longlink()
+        || entry_type.is_pax_local_extensions()
+        || entry_type.is_pax_global_extensions();
+
     // the size above will be overriden by the pax data if it has a size field.
     // same for uid and gid, which will be overridden in the header itself.
-    if let Some(pax_extensions_data) = pax_extensions_data {
+    if let Some(pax_extensions_data) = pax_extensions_data.filter(|_| !is_extension_header) {
         let pax = pax_extensions(pax_extensions_data);
         for extension in pax {
             let extension = extension.map_err(|_e| other("pax extensions invalid"))?;

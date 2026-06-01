@@ -1295,3 +1295,202 @@ async fn long_path() {
     let ar = Archive::new(rdr);
     ar.unpack(td.path()).await.unwrap();
 }
+
+const BLOCK: usize = 512;
+
+/// Append `data` as 512-byte tar blocks, zero-padding the last one.
+fn push_block(out: &mut Vec<u8>, data: &[u8]) {
+    out.extend_from_slice(data);
+    let rem = data.len() % BLOCK;
+    if rem != 0 {
+        out.extend(repeat(0u8).take(BLOCK - rem));
+    }
+}
+
+/// Encode a pax record `"<len> key=value\n"`, where `<len>` includes itself.
+fn pax_record(key: &str, value: &str) -> Vec<u8> {
+    let mut len = key.len() + value.len() + 3; // one ' ', one '=', one '\n'
+    loop {
+        let candidate = format!("{len} {key}={value}\n");
+        if candidate.len() == len {
+            return candidate.into_bytes();
+        }
+        len = candidate.len();
+    }
+}
+
+/// Regression test for GHSA-35rm-7j9c-2f7m (PAX extension-header desync).
+///
+/// A buffered PAX `size` applies to the next file entry, not an intervening
+/// extension header. Mis-applying it to a GNU longname (`L`) reads the longname
+/// body with the wrong length and desyncs the parse, so an `x -> L -> file`
+/// stream can smuggle content past a POSIX-correct parser like GNU tar.
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pax_size_not_applied_to_intermediary_longname() {
+    // B0: PAX local-extension header whose records declare size = 2 blocks.
+    let recs = pax_record("size", &(BLOCK * 2).to_string());
+    let mut x = Header::new_ustar();
+    t!(x.set_path("PaxHeaders/0"));
+    x.set_entry_type(EntryType::new(b'x'));
+    x.set_size(recs.len() as u64);
+    x.set_cksum();
+
+    // B3: longname for the next file; the GNU body is exactly `name + NUL`.
+    let longname = b"GNU_SEES_THIS.txt\0";
+    // B2: longname header, sized to its own body (one block on the wire).
+    let mut long = Header::new_gnu();
+    t!(long.set_path("././@LongLink"));
+    long.set_entry_type(EntryType::new(b'L'));
+    long.set_size(longname.len() as u64);
+    long.set_cksum();
+
+    // B4: the file the PAX `size` legitimately describes (own size 1 block).
+    let mut placeholder = Header::new_ustar();
+    t!(placeholder.set_path("placeholder_A"));
+    placeholder.set_entry_type(EntryType::Regular);
+    placeholder.set_size(BLOCK as u64);
+    placeholder.set_cksum();
+
+    // B5: a second file header, the smuggled payload. To a correct parser this
+    // is opaque data inside `placeholder_A`; a desynced parser parses it.
+    let smuggled_body = b"#!/bin/sh\n# SMUGGLED ENTRY: invisible to a GNU-tar-based scanner\n";
+    let mut smuggled = Header::new_ustar();
+    t!(smuggled.set_path("hidden_payload.sh"));
+    smuggled.set_entry_type(EntryType::Regular);
+    smuggled.set_size(smuggled_body.len() as u64);
+    smuggled.set_cksum();
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, x.as_bytes()); // B0
+    push_block(&mut tar, &recs); // B1
+    push_block(&mut tar, long.as_bytes()); // B2
+    push_block(&mut tar, longname); // B3
+    push_block(&mut tar, placeholder.as_bytes()); // B4
+    push_block(&mut tar, smuggled.as_bytes()); // B5
+    push_block(&mut tar, smuggled_body); // B6
+    tar.extend(repeat(0u8).take(BLOCK * 2)); // EOF
+
+    // stream view: the surfaced entry must converge with GNU tar.
+    let ar = Archive::new(&tar[..]);
+    let mut entries = t!(ar.entries());
+
+    let mut first = t!(entries.next().await.unwrap());
+    let mut body = Vec::new();
+    t!(first.read_to_end(&mut body).await);
+
+    // a correct parser reads B5 (opaque) as this entry's data; a desynced one
+    // reads B6, the smuggled script.
+    assert!(
+        body.starts_with(b"hidden_payload.sh"),
+        "PAX size mis-applied to intermediary `L` header: entry data desynced \
+         (prefix {:?})",
+        String::from_utf8_lossy(&body[..body.len().min(16)]),
+    );
+    assert!(
+        !body.starts_with(b"#!/bin/sh"),
+        "smuggled executable payload was materialized as entry data",
+    );
+    assert_eq!(&*first.path_bytes(), b"GNU_SEES_THIS.txt");
+    assert!(
+        entries.next().await.is_none(),
+        "unexpected extra entry surfaced"
+    );
+
+    // on-disk view: GNU tar writes one file, GNU_SEES_THIS.txt, holding the
+    // opaque bytes B5+B6, and never writes hidden_payload.sh. async-tar must match.
+    let mut expected = Vec::new();
+    push_block(&mut expected, smuggled.as_bytes()); // B5
+    push_block(&mut expected, smuggled_body); // B6
+
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
+    t!(Archive::new(&tar[..]).unpack(td.path()).await);
+
+    let extracted = td.path().join("GNU_SEES_THIS.txt");
+    assert!(
+        extracted.exists(),
+        "expected `GNU_SEES_THIS.txt` to be extracted"
+    );
+    let on_disk = t!(fs::read(&extracted).await);
+    assert_eq!(
+        on_disk,
+        expected,
+        "extracted file diverges from a POSIX-correct parser: for identical \
+         archive bytes async-tar wrote different contents than GNU tar (got \
+         prefix {:?})",
+        String::from_utf8_lossy(&on_disk[..on_disk.len().min(16)]),
+    );
+    assert!(
+        !td.path().join("hidden_payload.sh").exists(),
+        "smuggled file `hidden_payload.sh` was written to disk",
+    );
+}
+
+/// Regression test for the buffered-PAX state leak, adjacent to
+/// GHSA-35rm-7j9c-2f7m and not covered by the extension-header guard.
+///
+/// The records buffered for an `x` header are cleared from one copy but not the
+/// copy used for `size`/`uid`/`gid`, so the size bleeds onto the next entry. A
+/// `size` for one file followed by an unrelated file must not truncate the
+/// second file.
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pax_size_does_not_leak_to_subsequent_entry() {
+    let first_body = b"first-file-7"; // 12 bytes
+    let second_body = b"second-file-should-be-read-in-full-42-bytes"; // 43 bytes
+
+    // B0: PAX local-extension header carrying `size` for the FIRST file only.
+    let recs = pax_record("size", &first_body.len().to_string());
+    let mut x = Header::new_ustar();
+    t!(x.set_path("PaxHeaders/0"));
+    x.set_entry_type(EntryType::new(b'x'));
+    x.set_size(recs.len() as u64);
+    x.set_cksum();
+
+    // B2/B3: first file. Header size 0, so its length comes only from the pax
+    // `size` record (proving the override is live).
+    let mut first = Header::new_ustar();
+    t!(first.set_path("first.txt"));
+    first.set_entry_type(EntryType::Regular);
+    first.set_size(0);
+    first.set_cksum();
+
+    // B4/B5: second file, with its own size and no pax header.
+    let mut second = Header::new_ustar();
+    t!(second.set_path("second.txt"));
+    second.set_entry_type(EntryType::Regular);
+    second.set_size(second_body.len() as u64);
+    second.set_cksum();
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, x.as_bytes()); // B0
+    push_block(&mut tar, &recs); // B1
+    push_block(&mut tar, first.as_bytes()); // B2
+    push_block(&mut tar, first_body); // B3
+    push_block(&mut tar, second.as_bytes()); // B4
+    push_block(&mut tar, second_body); // B5
+    tar.extend(repeat(0u8).take(BLOCK * 2)); // EOF
+
+    let ar = Archive::new(&tar[..]);
+    let mut entries = t!(ar.entries());
+
+    let mut e1 = t!(entries.next().await.unwrap());
+    assert_eq!(&*e1.path_bytes(), b"first.txt");
+    let mut b1 = Vec::new();
+    t!(e1.read_to_end(&mut b1).await);
+    assert_eq!(b1, first_body, "first file read incorrectly");
+
+    let mut e2 = t!(entries.next().await.unwrap());
+    assert_eq!(&*e2.path_bytes(), b"second.txt");
+    let mut b2 = Vec::new();
+    t!(e2.read_to_end(&mut b2).await);
+    // If the buffered PAX size leaked, this is truncated to first_body.len().
+    assert_eq!(
+        b2,
+        second_body,
+        "PAX `size` from the first entry leaked onto the second entry: \
+         second file read as {} bytes instead of {}",
+        b2.len(),
+        second_body.len(),
+    );
+}
