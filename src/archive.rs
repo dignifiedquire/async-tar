@@ -392,6 +392,9 @@ impl<R: Read + Unpin> Stream for Entries<R> {
             new_fields.long_pathname = gnu_longname.take();
             new_fields.long_linkname = gnu_longlink.take();
             new_fields.pax_extensions = pax_extensions.take();
+            // these pax records apply to this entry only; clear the sizing copy
+            // so it doesn't leak onto the next entry
+            *current_pax_extensions = None;
 
             let State {
                 next,
