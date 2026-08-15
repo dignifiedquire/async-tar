@@ -179,9 +179,22 @@ impl<R: Read + Unpin> Archive<R> {
             ));
         }
 
+        self.entries_with_seek()
+    }
+
+    /// Construct a stream over the entries in this archive, without requiring
+    /// the underlying reader to be at position 0.
+    ///
+    /// This method allows starting entry iteration from the current position
+    /// in the archive stream (e.g. for seekable readers or calling entries multiple times).
+    pub fn entries_with_seek(self) -> io::Result<Entries<R>> {
+        let pos = self.inner.lock().unwrap().pos;
         Ok(Entries {
             archive: self,
-            current: State::default(),
+            current: State {
+                next: pos,
+                ..Default::default()
+            },
             fields: None,
             gnu_longlink: None,
             gnu_longname: None,
@@ -203,9 +216,16 @@ impl<R: Read + Unpin> Archive<R> {
             ));
         }
 
+        self.entries_raw_with_seek()
+    }
+
+    /// Construct a stream over the raw entries in this archive, without requiring
+    /// the underlying reader to be at position 0.
+    pub fn entries_raw_with_seek(self) -> io::Result<RawEntries<R>> {
+        let pos = self.inner.lock().unwrap().pos;
         Ok(RawEntries {
             archive: self,
-            current: (0, None, 0),
+            current: (pos, None, 0),
         })
     }
 
