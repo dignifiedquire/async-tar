@@ -9,7 +9,6 @@ license = "MIT/Apache-2.0"
 keywords = ["tar", "tarfile", "encoding"]
 readme = "README.md"
 edition = "2024"
-exclude = ["tests/archives/*"]
 rust-version = "1.85"
 
 description = """
