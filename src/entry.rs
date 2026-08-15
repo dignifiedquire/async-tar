@@ -8,7 +8,7 @@ use std::{
 #[cfg(feature = "runtime-async-std")]
 use async_std::{
     fs,
-    fs::{OpenOptions, Permissions},
+    fs::OpenOptions,
     io::{self, Error, ErrorKind, SeekFrom, prelude::*},
     path::{Component, Path, PathBuf},
 };
@@ -608,7 +608,7 @@ impl<R: Read + Unpin> EntryFields<R> {
                 {
                     async_std::os::windows::fs::symlink_file(src, dst).await
                 }
-                #[cfg(feature = "runtime-tokio")]
+                #[cfg(all(feature = "runtime-tokio", not(feature = "runtime-async-std")))]
                 {
                     tokio::fs::symlink_file(src, dst).await
                 }
