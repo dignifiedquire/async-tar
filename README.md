@@ -44,8 +44,9 @@
 
 - `runtime-async-std`: enabled by default, makes this crate compatible with `async-std`
 - `runtime-tokio`: makes this crate compatible with `tokio`
+- `runtime-smol`: makes this crate compatible with `smol` and the `futures-lite`/`async-fs` ecosystem
 
-> **Note**: These features are mutually exclusive. Enable only one runtime feature.
+> **Note**: These runtime features are mutually exclusive. Enable only one runtime feature.
 
 ## Reading an archive
 

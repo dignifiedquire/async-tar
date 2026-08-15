@@ -25,10 +25,15 @@ tokio = { version = "1.49", optional = true, features = ["fs", "io-util"] }
 filetime = "0.2.27"
 tokio-stream = { version = "0.1.18", features = ["fs"], optional = true }
 futures-core = "0.3.31"
+async-fs = { version = "2.1", optional = true }
+futures-lite = { version = "2.6", optional = true }
+smol = { version = "2.0", optional = true }
+blocking = { version = "1.6", optional = true }
 
 [dev-dependencies]
 async-std = { version = "1.13", features = ["unstable", "attributes"] }
 tokio = { version = "1.49", features = ["rt", "io-std", "rt-multi-thread", "macros"] }
+smol = "2.0"
 static_assertions = "1.1"
 tempfile = "3.24"
 
@@ -43,3 +48,4 @@ redox_syscall = "0.7"
 default = ["xattr", "runtime-async-std"]
 runtime-async-std = ["async-std"]
 runtime-tokio = ["tokio", "tokio-stream"]
+runtime-smol = ["async-fs", "futures-lite", "smol", "blocking"]

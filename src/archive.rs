@@ -1,4 +1,4 @@
-#[cfg(feature = "runtime-tokio")]
+#[cfg(any(feature = "runtime-tokio", feature = "runtime-smol"))]
 use std::path::Path;
 use std::{
     cmp,
@@ -22,6 +22,13 @@ use tokio::{
 };
 #[cfg(feature = "runtime-tokio")]
 use tokio_stream::{Stream, StreamExt};
+
+#[cfg(feature = "runtime-smol")]
+use {
+    async_fs as fs,
+    futures_lite::io::{self, AsyncRead as Read, AsyncReadExt},
+    futures_lite::stream::{Stream, StreamExt},
+};
 
 use crate::{
     Entry, GnuExtSparseHeader, GnuSparseHeader, Header,
@@ -727,7 +734,7 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
     Poll::Ready(Ok(()))
 }
 
-#[cfg(feature = "runtime-async-std")]
+#[cfg(any(feature = "runtime-async-std", feature = "runtime-smol"))]
 impl<R: Read + Unpin> Read for Archive<R> {
     fn poll_read(
         self: Pin<&mut Self>,
@@ -776,7 +783,7 @@ impl<R: Read + Unpin> Read for Archive<R> {
 ///
 /// If the reader reaches its end before filling the buffer at all, returns `false`.
 /// Otherwise returns `true`.
-#[cfg(feature = "runtime-async-std")]
+#[cfg(any(feature = "runtime-async-std", feature = "runtime-smol"))]
 fn poll_try_read_all<R: Read + Unpin>(
     mut source: R,
     cx: &mut Context<'_>,
@@ -833,7 +840,7 @@ fn poll_try_read_all<R: Read + Unpin>(
 }
 
 /// Skip n bytes on the given source.
-#[cfg(feature = "runtime-async-std")]
+#[cfg(any(feature = "runtime-async-std", feature = "runtime-smol"))]
 fn poll_skip<R: Read + Unpin>(
     mut source: R,
     cx: &mut Context<'_>,
