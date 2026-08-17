@@ -1,5 +1,10 @@
 use std::borrow::Cow;
 
+#[cfg(any(feature = "runtime-tokio", feature = "runtime-smol"))]
+use std::fs::Metadata;
+#[cfg(any(feature = "runtime-tokio", feature = "runtime-smol"))]
+use std::path::Path;
+
 #[cfg(feature = "runtime-async-std")]
 use async_std::fs::Metadata;
 #[cfg(feature = "runtime-async-std")]
@@ -10,16 +15,19 @@ use async_std::{
     prelude::*,
 };
 #[cfg(feature = "runtime-tokio")]
-use std::fs::Metadata;
-#[cfg(feature = "runtime-tokio")]
-use std::path::Path;
-#[cfg(feature = "runtime-tokio")]
 use tokio::{
     fs,
     io::{self, AsyncRead as Read, AsyncReadExt, AsyncWrite as Write, AsyncWriteExt},
 };
 #[cfg(feature = "runtime-tokio")]
 use tokio_stream::StreamExt;
+
+#[cfg(feature = "runtime-smol")]
+use {
+    async_fs as fs,
+    futures_lite::io::{self, AsyncRead as Read, AsyncReadExt, AsyncWrite as Write, AsyncWriteExt},
+    futures_lite::stream::StreamExt,
+};
 
 use crate::{
     EntryType, Header,
@@ -622,7 +630,7 @@ async fn append_dir_all(
         async fn check_is_dir(path: &Path) -> bool {
             path.is_dir().await
         }
-        #[cfg(feature = "runtime-tokio")]
+        #[cfg(any(feature = "runtime-tokio", feature = "runtime-smol"))]
         async fn check_is_dir(path: &Path) -> bool {
             fs::metadata(path)
                 .await
@@ -632,7 +640,7 @@ async fn append_dir_all(
 
         // In case of a symlink pointing to a directory, is_dir is false, but src.is_dir() will return true
         if is_dir || (is_symlink && follow && check_is_dir(&src).await) {
-            #[cfg(feature = "runtime-async-std")]
+            #[cfg(any(feature = "runtime-async-std", feature = "runtime-smol"))]
             let mut entries = fs::read_dir(&src).await?;
             #[cfg(feature = "runtime-tokio")]
             let mut entries = tokio_stream::wrappers::ReadDirStream::new(fs::read_dir(&src).await?);
@@ -659,6 +667,15 @@ async fn append_dir_all(
 impl<W: Write + Unpin + Send + Sync> Drop for Builder<W> {
     fn drop(&mut self) {
         async_std::task::block_on(async move {
+            let _ = self.finish().await;
+        });
+    }
+}
+
+#[cfg(feature = "runtime-smol")]
+impl<W: Write + Unpin + Send + Sync> Drop for Builder<W> {
+    fn drop(&mut self) {
+        smol::future::block_on(async move {
             let _ = self.finish().await;
         });
     }

@@ -5,23 +5,20 @@ use std::os::windows::prelude::*;
 
 use std::{borrow::Cow, fmt, iter, iter::repeat, iter::repeat_n, mem, str};
 
-#[cfg(all(windows, feature = "runtime-async-std"))]
-use async_std::fs;
+#[cfg(all(windows, any(feature = "runtime-async-std", feature = "runtime-smol")))]
+use std::os::windows::fs::MetadataExt;
+#[cfg(any(feature = "runtime-tokio", feature = "runtime-smol"))]
+use std::{
+    fs::Metadata,
+    io,
+    path::{Component, Path, PathBuf},
+};
 #[cfg(feature = "runtime-async-std")]
 use async_std::{
     fs::Metadata,
     io,
     path::{Component, Path, PathBuf},
 };
-#[cfg(feature = "runtime-tokio")]
-use std::{
-    fs::Metadata,
-    path::{Component, Path, PathBuf},
-};
-#[cfg(all(windows, feature = "runtime-tokio"))]
-use tokio::fs;
-#[cfg(feature = "runtime-tokio")]
-use tokio::io;
 
 use crate::{EntryType, other};
 
@@ -734,7 +731,7 @@ impl Header {
 
     #[cfg(target_arch = "wasm32")]
     #[allow(unused_variables)]
-    fn fill_platform_from(&mut self, meta: &fs::Metadata, mode: HeaderMode) {
+    fn fill_platform_from(&mut self, meta: &Metadata, mode: HeaderMode) {
         unimplemented!();
     }
 

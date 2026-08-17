@@ -11,6 +11,12 @@ use tokio::{
 };
 #[cfg(feature = "runtime-tokio")]
 use tokio_stream::StreamExt;
+#[cfg(feature = "runtime-smol")]
+use {
+    async_fs::{self as fs, File, create_dir},
+    futures_lite::io::AsyncReadExt,
+    futures_lite::stream::StreamExt,
+};
 
 use tempfile::Builder;
 

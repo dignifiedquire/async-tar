@@ -19,6 +19,14 @@ use tokio::{
 };
 #[cfg(feature = "runtime-tokio")]
 use tokio_stream::StreamExt;
+#[cfg(feature = "runtime-smol")]
+use std::path::{Path, PathBuf};
+#[cfg(feature = "runtime-smol")]
+use {
+    async_fs::{self as fs, File},
+    futures_lite::io::{self, AsyncRead as Read, AsyncReadExt as ReadExt, AsyncWrite as Write, AsyncWriteExt as WriteExt},
+    futures_lite::stream::StreamExt,
+};
 
 macro_rules! t {
     ($e:expr) => {
@@ -1493,4 +1501,26 @@ async fn pax_size_does_not_leak_to_subsequent_entry() {
         b2.len(),
         second_body.len(),
     );
+}
+
+#[cfg(feature = "runtime-smol")]
+#[test]
+fn test_smol_archive_roundtrip() {
+    smol::future::block_on(async {
+        let mut ar = Builder::new(Vec::new());
+        let mut header = Header::new_gnu();
+        header.set_path("hello.txt").unwrap();
+        header.set_size(5);
+        header.set_cksum();
+        ar.append(&header, &b"world"[..]).await.unwrap();
+        let data = ar.into_inner().await.unwrap();
+
+        let archive = Archive::new(&data[..]);
+        let mut entries = archive.entries().unwrap();
+        let mut entry = entries.next().await.unwrap().unwrap();
+        assert_eq!(&*entry.path_bytes(), b"hello.txt");
+        let mut buf = String::new();
+        entry.read_to_string(&mut buf).await.unwrap();
+        assert_eq!(buf, "world");
+    });
 }

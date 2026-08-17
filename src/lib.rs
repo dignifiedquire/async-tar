@@ -20,13 +20,21 @@
 #![deny(missing_docs)]
 #![deny(clippy::all)]
 
-#[cfg(all(feature = "runtime-async-std", feature = "runtime-tokio"))]
+#[cfg(any(
+    all(feature = "runtime-async-std", feature = "runtime-tokio"),
+    all(feature = "runtime-async-std", feature = "runtime-smol"),
+    all(feature = "runtime-tokio", feature = "runtime-smol"),
+))]
 compile_error!(
-    "Features `runtime-async-std` and `runtime-tokio` are mutually exclusive. Please enable only one."
+    "Features `runtime-async-std`, `runtime-tokio`, and `runtime-smol` are mutually exclusive. Please enable only one."
 );
 
-#[cfg(not(any(feature = "runtime-async-std", feature = "runtime-tokio")))]
-compile_error!("Either `runtime-async-std` or `runtime-tokio` feature must be enabled.");
+#[cfg(not(any(
+    feature = "runtime-async-std",
+    feature = "runtime-tokio",
+    feature = "runtime-smol"
+)))]
+compile_error!("One of `runtime-async-std`, `runtime-tokio`, or `runtime-smol` features must be enabled.");
 
 use std::io::Error;
 
@@ -69,6 +77,12 @@ pub(crate) async fn fs_canonicalize(
 ) -> tokio::io::Result<std::path::PathBuf> {
     tokio::fs::canonicalize(path).await
 }
+#[cfg(feature = "runtime-smol")]
+pub(crate) async fn fs_canonicalize(
+    path: &std::path::Path,
+) -> std::io::Result<std::path::PathBuf> {
+    async_fs::canonicalize(path).await
+}
 
 #[cfg(feature = "runtime-async-std")]
 async fn symlink_metadata(
@@ -80,6 +94,10 @@ async fn symlink_metadata(
 async fn symlink_metadata(p: &std::path::Path) -> tokio::io::Result<std::fs::Metadata> {
     tokio::fs::symlink_metadata(p).await
 }
+#[cfg(feature = "runtime-smol")]
+async fn symlink_metadata(p: &std::path::Path) -> std::io::Result<std::fs::Metadata> {
+    async_fs::symlink_metadata(p).await
+}
 
 #[cfg(feature = "runtime-async-std")]
 async fn metadata(p: &async_std::path::Path) -> async_std::io::Result<async_std::fs::Metadata> {
@@ -88,4 +106,8 @@ async fn metadata(p: &async_std::path::Path) -> async_std::io::Result<async_std:
 #[cfg(feature = "runtime-tokio")]
 async fn metadata(p: &std::path::Path) -> tokio::io::Result<std::fs::Metadata> {
     tokio::fs::metadata(p).await
+}
+#[cfg(feature = "runtime-smol")]
+async fn metadata(p: &std::path::Path) -> std::io::Result<std::fs::Metadata> {
+    async_fs::metadata(p).await
 }

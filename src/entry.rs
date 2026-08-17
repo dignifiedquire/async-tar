@@ -13,15 +13,20 @@ use async_std::{
     path::{Component, Path, PathBuf},
 };
 use futures_core::ready;
-#[cfg(all(unix, feature = "runtime-tokio"))]
+#[cfg(all(unix, any(feature = "runtime-tokio", feature = "runtime-smol")))]
 use std::fs::Permissions;
-#[cfg(feature = "runtime-tokio")]
+#[cfg(any(feature = "runtime-tokio", feature = "runtime-smol"))]
 use std::path::{Component, Path, PathBuf};
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
     fs,
     fs::OpenOptions,
     io::{self, AsyncRead as Read, AsyncReadExt, AsyncSeekExt, Error, ErrorKind, SeekFrom},
+};
+#[cfg(feature = "runtime-smol")]
+use {
+    async_fs::{self as fs, OpenOptions},
+    futures_lite::io::{self, AsyncRead as Read, AsyncReadExt, AsyncSeekExt, Error, ErrorKind, SeekFrom},
 };
 
 use filetime::{self, FileTime};
@@ -319,7 +324,7 @@ impl<R: Read + Unpin> Entry<R> {
     }
 }
 
-#[cfg(feature = "runtime-async-std")]
+#[cfg(any(feature = "runtime-async-std", feature = "runtime-smol"))]
 impl<R: Read + Unpin> Read for Entry<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -612,6 +617,12 @@ impl<R: Read + Unpin> EntryFields<R> {
                 {
                     tokio::fs::symlink_file(src, dst).await
                 }
+                #[cfg(feature = "runtime-smol")]
+                {
+                    let src = src.to_path_buf();
+                    let dst = dst.to_path_buf();
+                    blocking::unblock(move || std::os::windows::fs::symlink_file(src, dst)).await
+                }
             }
 
             #[cfg(any(unix, target_os = "redox"))]
@@ -620,6 +631,12 @@ impl<R: Read + Unpin> EntryFields<R> {
                 async_std::os::unix::fs::symlink(src, dst).await?;
                 #[cfg(feature = "runtime-tokio")]
                 tokio::fs::symlink(src, dst).await?;
+                #[cfg(feature = "runtime-smol")]
+                {
+                    let src = src.to_path_buf();
+                    let dst = dst.to_path_buf();
+                    blocking::unblock(move || std::os::unix::fs::symlink(src, dst)).await?;
+                }
 
                 Ok(())
             }
@@ -898,7 +915,7 @@ impl<R: Read + Unpin> EntryFields<R> {
     }
 }
 
-#[cfg(feature = "runtime-async-std")]
+#[cfg(any(feature = "runtime-async-std", feature = "runtime-smol"))]
 impl<R: Read + Unpin> Read for EntryFields<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -987,7 +1004,7 @@ impl<R: Read + Unpin> Read for EntryFields<R> {
     }
 }
 
-#[cfg(feature = "runtime-async-std")]
+#[cfg(any(feature = "runtime-async-std", feature = "runtime-smol"))]
 impl<R: Read + Unpin> Read for EntryIo<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -1028,7 +1045,7 @@ impl Drop for Guard<'_> {
     }
 }
 
-#[cfg(feature = "runtime-async-std")]
+#[cfg(any(feature = "runtime-async-std", feature = "runtime-smol"))]
 fn poll_read_all_internal<R: Read + ?Sized>(
     mut rd: Pin<&mut R>,
     cx: &mut Context<'_>,
