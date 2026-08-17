@@ -415,6 +415,10 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
 
     /// Finish writing this archive, emitting the termination sections.
     ///
+    /// Per the TAR specification, this writes two 512-byte zero blocks marking the
+    /// end of the archive (EOF record). Note that standard TAR archives do not write
+    /// or maintain a trailer index table at the end of the archive (unlike ZIP files).
+    ///
     /// This function should only be called when the archive has been written
     /// entirely and if an I/O error happens the underlying object still needs
     /// to be acquired.
