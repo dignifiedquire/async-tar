@@ -90,6 +90,10 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// This function will finish writing the archive if the `finish` function
     /// hasn't yet been called, returning any I/O error which happens during
     /// that operation.
+    ///
+    /// Note that this does not flush or close the underlying writer. If you are
+    /// wrapping a writer that requires flushing or shutdown (such as a
+    /// compression encoder), you must do so on the returned writer yourself.
     pub async fn into_inner(mut self) -> io::Result<W> {
         if !self.finished {
             self.finish().await?;
@@ -413,19 +417,41 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
         Ok(())
     }
 
-    /// Finish writing this archive, emitting the termination sections.
+    /// Finish writing this archive by emitting the two 512-byte termination blocks.
     ///
     /// This function should only be called when the archive has been written
     /// entirely and if an I/O error happens the underlying object still needs
     /// to be acquired.
     ///
-    /// In most situations the `into_inner` method should be preferred.
+    /// This does **not** flush the underlying writer. If the writer is buffered
+    /// or requires explicit flushing, use [`finish_and_flush`](Builder::finish_and_flush)
+    /// instead, or call `.flush()` on the writer after retrieving it via
+    /// [`into_inner`](Builder::into_inner).
+    ///
+    /// In most situations the [`into_inner`](Builder::into_inner) method should
+    /// be preferred.
     pub async fn finish(&mut self) -> io::Result<()> {
         if self.finished {
             return Ok(());
         }
         self.finished = true;
         self.get_mut().write_all(&[0; 1024]).await?;
+        Ok(())
+    }
+
+    /// Finish writing this archive and flush the underlying writer.
+    ///
+    /// This is equivalent to calling [`finish`](Builder::finish) followed by
+    /// flushing the underlying writer. Use this when the writer is buffered
+    /// (e.g. a `BufWriter`) and you want to ensure all bytes are pushed
+    /// through without consuming the writer.
+    ///
+    /// If the writer requires shutdown or closing (e.g. a compression encoder),
+    /// use [`into_inner`](Builder::into_inner) to retrieve it and finalise it
+    /// yourself.
+    pub async fn finish_and_flush(&mut self) -> io::Result<()> {
+        self.finish().await?;
+        self.get_mut().flush().await?;
         Ok(())
     }
 }
@@ -676,7 +702,99 @@ impl<W: Write + Unpin + Send + Sync> Drop for Builder<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::task::{Context, Poll};
 
     assert_impl_all!(fs::File: Send, Sync);
     assert_impl_all!(Builder<fs::File>: Send, Sync);
+
+    struct FlushTracker {
+        flushed: Arc<AtomicBool>,
+    }
+
+    #[cfg(feature = "runtime-async-std")]
+    impl async_std::io::Write for FlushTracker {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            self.flushed.store(true, Ordering::SeqCst);
+            Poll::Ready(Ok(()))
+        }
+        fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[cfg(feature = "runtime-tokio")]
+    impl tokio::io::AsyncWrite for FlushTracker {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            self.flushed.store(true, Ordering::SeqCst);
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[cfg(feature = "runtime-async-std")]
+    #[async_std::test]
+    async fn test_builder_finish_does_not_flush() {
+        let flushed = Arc::new(AtomicBool::new(false));
+        let tracker = FlushTracker {
+            flushed: flushed.clone(),
+        };
+        let mut builder = Builder::new(tracker);
+        builder.finish().await.unwrap();
+        assert!(!flushed.load(Ordering::SeqCst), "finish() should not flush");
+    }
+
+    #[cfg(feature = "runtime-async-std")]
+    #[async_std::test]
+    async fn test_builder_finish_and_flush_flushes() {
+        let flushed = Arc::new(AtomicBool::new(false));
+        let tracker = FlushTracker {
+            flushed: flushed.clone(),
+        };
+        let mut builder = Builder::new(tracker);
+        builder.finish_and_flush().await.unwrap();
+        assert!(flushed.load(Ordering::SeqCst), "finish_and_flush() should flush");
+    }
+
+    #[cfg(feature = "runtime-tokio")]
+    #[tokio::test]
+    async fn test_builder_finish_does_not_flush() {
+        let flushed = Arc::new(AtomicBool::new(false));
+        let tracker = FlushTracker {
+            flushed: flushed.clone(),
+        };
+        let mut builder = Builder::new(tracker);
+        builder.finish().await.unwrap();
+        assert!(!flushed.load(Ordering::SeqCst), "finish() should not flush");
+    }
+
+    #[cfg(feature = "runtime-tokio")]
+    #[tokio::test]
+    async fn test_builder_finish_and_flush_flushes() {
+        let flushed = Arc::new(AtomicBool::new(false));
+        let tracker = FlushTracker {
+            flushed: flushed.clone(),
+        };
+        let mut builder = Builder::new(tracker);
+        builder.finish_and_flush().await.unwrap();
+        assert!(flushed.load(Ordering::SeqCst), "finish_and_flush() should flush");
+    }
 }
