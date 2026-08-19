@@ -37,14 +37,14 @@ use crate::{
 ///
 /// [`into_inner`]: Builder::into_inner
 /// [`finish`]: Builder::finish
-pub struct Builder<W: Write + Unpin + Send + Sync> {
+pub struct Builder<W: Write + Unpin> {
     mode: HeaderMode,
     follow: bool,
     finished: bool,
     obj: Option<W>,
 }
 
-impl<W: Write + Unpin + Send + Sync> Builder<W> {
+impl<W: Write + Unpin> Builder<W> {
     /// Create a new archive builder with the underlying object as the
     /// destination of all data written. The builder will use
     /// `HeaderMode::Complete` by default.
@@ -138,7 +138,7 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// #
     /// # Ok(()) }) }
     /// ```
-    pub async fn append<R: Read + Unpin + Send>(
+    pub async fn append<R: Read + Unpin>(
         &mut self,
         header: &Header,
         mut data: R,
@@ -192,7 +192,7 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// #
     /// # Ok(()) }) }
     /// ```
-    pub async fn append_data<P: AsRef<Path>, R: Read + Unpin + Send>(
+    pub async fn append_data<P: AsRef<Path>, R: Read + Unpin>(
         &mut self,
         header: &mut Header,
         path: P,
@@ -431,9 +431,9 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
 }
 
 async fn append(
-    mut dst: &mut (dyn Write + Unpin + Send),
+    mut dst: &mut (dyn Write + Unpin),
     header: &Header,
-    mut data: &mut (dyn Read + Unpin + Send),
+    mut data: &mut (dyn Read + Unpin),
 ) -> io::Result<()> {
     dst.write_all(header.as_bytes()).await?;
     let len = io::copy(&mut data, &mut dst).await?;
@@ -449,7 +449,7 @@ async fn append(
 }
 
 async fn append_path_with_name(
-    dst: &mut (dyn Write + Unpin + Sync + Send),
+    dst: &mut (dyn Write + Unpin),
     path: &Path,
     name: Option<&Path>,
     mode: HeaderMode,
@@ -503,7 +503,7 @@ async fn append_path_with_name(
 }
 
 async fn append_file(
-    dst: &mut (dyn Write + Unpin + Send + Sync),
+    dst: &mut (dyn Write + Unpin),
     path: &Path,
     file: &mut fs::File,
     mode: HeaderMode,
@@ -514,7 +514,7 @@ async fn append_file(
 }
 
 async fn append_dir(
-    dst: &mut (dyn Write + Unpin + Send + Sync),
+    dst: &mut (dyn Write + Unpin),
     path: &Path,
     src_path: &Path,
     mode: HeaderMode,
@@ -540,7 +540,7 @@ fn prepare_header(size: u64, entry_type: EntryType) -> Header {
 }
 
 async fn prepare_header_path(
-    dst: &mut (dyn Write + Unpin + Send + Sync),
+    dst: &mut (dyn Write + Unpin),
     header: &mut Header,
     path: &Path,
 ) -> io::Result<()> {
@@ -569,7 +569,7 @@ async fn prepare_header_path(
 }
 
 async fn prepare_header_link(
-    dst: &mut (dyn Write + Unpin + Send + Sync),
+    dst: &mut (dyn Write + Unpin),
     header: &mut Header,
     link_name: &Path,
 ) -> io::Result<()> {
@@ -587,10 +587,10 @@ async fn prepare_header_link(
 }
 
 async fn append_fs(
-    dst: &mut (dyn Write + Unpin + Send + Sync),
+    dst: &mut (dyn Write + Unpin),
     path: &Path,
     meta: &Metadata,
-    read: &mut (dyn Read + Unpin + Sync + Send),
+    read: &mut (dyn Read + Unpin),
     mode: HeaderMode,
     link_name: Option<&Path>,
 ) -> io::Result<()> {
@@ -608,7 +608,7 @@ async fn append_fs(
 }
 
 async fn append_dir_all(
-    dst: &mut (dyn Write + Unpin + Send + Sync),
+    dst: &mut (dyn Write + Unpin),
     path: &Path,
     src_path: &Path,
     mode: HeaderMode,
@@ -656,7 +656,7 @@ async fn append_dir_all(
 }
 
 #[cfg(feature = "runtime-async-std")]
-impl<W: Write + Unpin + Send + Sync> Drop for Builder<W> {
+impl<W: Write + Unpin> Drop for Builder<W> {
     fn drop(&mut self) {
         async_std::task::block_on(async move {
             let _ = self.finish().await;
@@ -665,7 +665,7 @@ impl<W: Write + Unpin + Send + Sync> Drop for Builder<W> {
 }
 
 #[cfg(feature = "runtime-tokio")]
-impl<W: Write + Unpin + Send + Sync> Drop for Builder<W> {
+impl<W: Write + Unpin> Drop for Builder<W> {
     fn drop(&mut self) {
         if !self.finished && !std::thread::panicking() && self.obj.is_some() {
             panic!("Builder dropped without finalizing; call finish() or into_inner()");
@@ -676,7 +676,49 @@ impl<W: Write + Unpin + Send + Sync> Drop for Builder<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
 
     assert_impl_all!(fs::File: Send, Sync);
     assert_impl_all!(Builder<fs::File>: Send, Sync);
+
+    struct NonSendWriter(std::rc::Rc<()>);
+    #[cfg(feature = "runtime-async-std")]
+    impl async_std::io::Write for NonSendWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+    #[cfg(feature = "runtime-tokio")]
+    impl tokio::io::AsyncWrite for NonSendWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[test]
+    fn test_builder_non_send() {
+        let mut builder = Builder::new(NonSendWriter(std::rc::Rc::new(())));
+        builder.finished = true;
+    }
 }
