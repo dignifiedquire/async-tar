@@ -1494,3 +1494,37 @@ async fn pax_size_does_not_leak_to_subsequent_entry() {
         second_body.len(),
     );
 }
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn ustar_prefix_long_path_variants() {
+    let long_path = "3rdparty/https/hex.pm/packages/decimal/_build/default/lib/decimal/consolidated/Elixir.Hex.Solver.Constraint.beam";
+    assert!(long_path.len() > 100);
+
+    for version in [b"00", b"  ", b" \0", b"\0\0"] {
+        let mut header = Header::new_ustar();
+        t!(header.set_path(long_path));
+        header.set_size(5);
+        header.set_cksum();
+        unsafe {
+            let ustar = (header.as_bytes().as_ptr() as *mut u8).add(257);
+            // magic is bytes 257..263, version is bytes 263..265
+            std::ptr::copy_nonoverlapping(version.as_ptr(), ustar.add(6), 2);
+        }
+        header.set_cksum();
+
+        let mut tar = Vec::new();
+        push_block(&mut tar, header.as_bytes());
+        push_block(&mut tar, b"hello");
+        tar.extend(repeat(0u8).take(BLOCK * 2));
+
+        let ar = Archive::new(&tar[..]);
+        let mut entries = t!(ar.entries());
+        let mut entry = t!(entries.next().await.unwrap());
+        assert_eq!(t!(entry.path()).to_str().unwrap(), long_path);
+        assert_eq!(&*entry.path_bytes(), long_path.as_bytes());
+        let mut contents = String::new();
+        t!(entry.read_to_string(&mut contents).await);
+        assert_eq!(contents, "hello");
+    }
+}
