@@ -1494,3 +1494,30 @@ async fn pax_size_does_not_leak_to_subsequent_entry() {
         second_body.len(),
     );
 }
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn archive_entries_with_seek() {
+    let mut ar = Builder::new(Vec::new());
+    let mut header = Header::new_gnu();
+    header.set_path("file1.txt").unwrap();
+    header.set_size(5);
+    header.set_cksum();
+    ar.append(&header, &b"file1"[..]).await.unwrap();
+
+    let mut header2 = Header::new_gnu();
+    header2.set_path("file2.txt").unwrap();
+    header2.set_size(5);
+    header2.set_cksum();
+    ar.append(&header2, &b"file2"[..]).await.unwrap();
+
+    let data = ar.into_inner().await.unwrap();
+
+    let archive = Archive::new(&data[..]);
+    let mut entries = archive.entries_with_seek().unwrap();
+    let e1 = entries.next().await.unwrap().unwrap();
+    assert_eq!(&*e1.path_bytes(), b"file1.txt");
+
+    let e2 = entries.next().await.unwrap().unwrap();
+    assert_eq!(&*e2.path_bytes(), b"file2.txt");
+}
