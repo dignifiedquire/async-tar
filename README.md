@@ -86,6 +86,12 @@ fn main() {
 }
 ```
 
+## TAR Format and Indexing
+
+By specification (POSIX.1-1988 ustar, POSIX.1-2001 pax, GNU tar), a TAR archive is a sequential series of file entries (512-byte header block followed by data blocks padded to 512 bytes). The archive terminates with two 512-byte zero blocks (the EOF record).
+
+Unlike archive formats such as ZIP, standard TAR files **do not** contain an index table or central directory at the end of the archive. To list files or locate specific entries, the archive is read sequentially or indexed externally.
+
 # MSRV
 
 Minimal stable rust version: 1.85
