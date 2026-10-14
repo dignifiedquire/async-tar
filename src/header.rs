@@ -1026,15 +1026,28 @@ impl UstarHeader {
         }
         Ok(())
     }
+}
 
-    /// See `Header::username_bytes`
-    pub fn username_bytes(&self) -> &[u8] {
-        truncate(&self.uname)
+// Private trait that provides shared accessor/mutator logic for fields common to
+// both UstarHeader and GnuHeader. Each implementor exposes raw field slices; the
+// default methods contain the shared logic exactly once.
+trait UstarGnuFields {
+    fn uname(&self) -> &[u8];
+    fn uname_mut(&mut self) -> &mut [u8];
+    fn gname(&self) -> &[u8];
+    fn gname_mut(&mut self) -> &mut [u8];
+    fn dev_major(&self) -> &[u8];
+    fn dev_major_mut(&mut self) -> &mut [u8];
+    fn dev_minor(&self) -> &[u8];
+    fn dev_minor_mut(&mut self) -> &mut [u8];
+    fn path_lossy(&self) -> String;
+
+    fn username_bytes_impl(&self) -> &[u8] {
+        truncate(self.uname())
     }
 
-    /// See `Header::set_username`
-    pub fn set_username(&mut self, name: &str) -> io::Result<()> {
-        copy_into(&mut self.uname, name.as_bytes()).map_err(|err| {
+    fn set_username_impl(&mut self, name: &str) -> io::Result<()> {
+        copy_into(self.uname_mut(), name.as_bytes()).map_err(|err| {
             io::Error::new(
                 err.kind(),
                 format!("{} when setting username for {}", err, self.path_lossy()),
@@ -1042,14 +1055,12 @@ impl UstarHeader {
         })
     }
 
-    /// See `Header::groupname_bytes`
-    pub fn groupname_bytes(&self) -> &[u8] {
-        truncate(&self.gname)
+    fn groupname_bytes_impl(&self) -> &[u8] {
+        truncate(self.gname())
     }
 
-    /// See `Header::set_groupname`
-    pub fn set_groupname(&mut self, name: &str) -> io::Result<()> {
-        copy_into(&mut self.gname, name.as_bytes()).map_err(|err| {
+    fn set_groupname_impl(&mut self, name: &str) -> io::Result<()> {
+        copy_into(self.gname_mut(), name.as_bytes()).map_err(|err| {
             io::Error::new(
                 err.kind(),
                 format!("{} when setting groupname for {}", err, self.path_lossy()),
@@ -1057,47 +1068,66 @@ impl UstarHeader {
         })
     }
 
+    fn device_major_impl(&self) -> io::Result<u32> {
+        octal_from(self.dev_major())
+            .map(|u| u as u32)
+            .map_err(|err| {
+                io::Error::new(
+                    err.kind(),
+                    format!("{} when getting device_major for {}", err, self.path_lossy()),
+                )
+            })
+    }
+
+    fn set_device_major_impl(&mut self, major: u32) {
+        octal_into(self.dev_major_mut(), major);
+    }
+
+    fn device_minor_impl(&self) -> io::Result<u32> {
+        octal_from(self.dev_minor())
+            .map(|u| u as u32)
+            .map_err(|err| {
+                io::Error::new(
+                    err.kind(),
+                    format!("{} when getting device_minor for {}", err, self.path_lossy()),
+                )
+            })
+    }
+
+    fn set_device_minor_impl(&mut self, minor: u32) {
+        octal_into(self.dev_minor_mut(), minor);
+    }
+}
+
+impl UstarGnuFields for UstarHeader {
+    fn uname(&self) -> &[u8] { &self.uname }
+    fn uname_mut(&mut self) -> &mut [u8] { &mut self.uname }
+    fn gname(&self) -> &[u8] { &self.gname }
+    fn gname_mut(&mut self) -> &mut [u8] { &mut self.gname }
+    fn dev_major(&self) -> &[u8] { &self.dev_major }
+    fn dev_major_mut(&mut self) -> &mut [u8] { &mut self.dev_major }
+    fn dev_minor(&self) -> &[u8] { &self.dev_minor }
+    fn dev_minor_mut(&mut self) -> &mut [u8] { &mut self.dev_minor }
+    fn path_lossy(&self) -> String { self.as_header().path_lossy() }
+}
+
+impl UstarHeader {
+    /// See `Header::username_bytes`
+    pub fn username_bytes(&self) -> &[u8] { self.username_bytes_impl() }
+    /// See `Header::set_username`
+    pub fn set_username(&mut self, name: &str) -> io::Result<()> { self.set_username_impl(name) }
+    /// See `Header::groupname_bytes`
+    pub fn groupname_bytes(&self) -> &[u8] { self.groupname_bytes_impl() }
+    /// See `Header::set_groupname`
+    pub fn set_groupname(&mut self, name: &str) -> io::Result<()> { self.set_groupname_impl(name) }
     /// See `Header::device_major`
-    pub fn device_major(&self) -> io::Result<u32> {
-        octal_from(&self.dev_major)
-            .map(|u| u as u32)
-            .map_err(|err| {
-                io::Error::new(
-                    err.kind(),
-                    format!(
-                        "{} when getting device_major for {}",
-                        err,
-                        self.path_lossy()
-                    ),
-                )
-            })
-    }
-
+    pub fn device_major(&self) -> io::Result<u32> { self.device_major_impl() }
     /// See `Header::set_device_major`
-    pub fn set_device_major(&mut self, major: u32) {
-        octal_into(&mut self.dev_major, major);
-    }
-
+    pub fn set_device_major(&mut self, major: u32) { self.set_device_major_impl(major) }
     /// See `Header::device_minor`
-    pub fn device_minor(&self) -> io::Result<u32> {
-        octal_from(&self.dev_minor)
-            .map(|u| u as u32)
-            .map_err(|err| {
-                io::Error::new(
-                    err.kind(),
-                    format!(
-                        "{} when getting device_minor for {}",
-                        err,
-                        self.path_lossy()
-                    ),
-                )
-            })
-    }
-
+    pub fn device_minor(&self) -> io::Result<u32> { self.device_minor_impl() }
     /// See `Header::set_device_minor`
-    pub fn set_device_minor(&mut self, minor: u32) {
-        octal_into(&mut self.dev_minor, minor);
-    }
+    pub fn set_device_minor(&mut self, minor: u32) { self.set_device_minor_impl(minor) }
 
     /// Views this as a normal `Header`
     pub fn as_header(&self) -> &Header {
@@ -1118,94 +1148,44 @@ impl fmt::Debug for UstarHeader {
     }
 }
 
+impl UstarGnuFields for GnuHeader {
+    fn uname(&self) -> &[u8] { &self.uname }
+    fn uname_mut(&mut self) -> &mut [u8] { &mut self.uname }
+    fn gname(&self) -> &[u8] { &self.gname }
+    fn gname_mut(&mut self) -> &mut [u8] { &mut self.gname }
+    fn dev_major(&self) -> &[u8] { &self.dev_major }
+    fn dev_major_mut(&mut self) -> &mut [u8] { &mut self.dev_major }
+    fn dev_minor(&self) -> &[u8] { &self.dev_minor }
+    fn dev_minor_mut(&mut self) -> &mut [u8] { &mut self.dev_minor }
+    fn path_lossy(&self) -> String { self.as_header().path_lossy() }
+}
+
 impl GnuHeader {
     /// See `Header::username_bytes`
-    pub fn username_bytes(&self) -> &[u8] {
-        truncate(&self.uname)
-    }
-
-    /// Gets the fullname (group:user) in a "lossy" way, used for error reporting ONLY.
-    fn fullname_lossy(&self) -> String {
-        format!(
-            "{}:{}",
-            String::from_utf8_lossy(self.groupname_bytes()),
-            String::from_utf8_lossy(self.username_bytes()),
-        )
-    }
-
+    pub fn username_bytes(&self) -> &[u8] { self.username_bytes_impl() }
     /// See `Header::set_username`
-    pub fn set_username(&mut self, name: &str) -> io::Result<()> {
-        copy_into(&mut self.uname, name.as_bytes()).map_err(|err| {
-            io::Error::new(
-                err.kind(),
-                format!(
-                    "{} when setting username for {}",
-                    err,
-                    self.fullname_lossy()
-                ),
-            )
-        })
-    }
-
+    pub fn set_username(&mut self, name: &str) -> io::Result<()> { self.set_username_impl(name) }
     /// See `Header::groupname_bytes`
-    pub fn groupname_bytes(&self) -> &[u8] {
-        truncate(&self.gname)
-    }
-
+    pub fn groupname_bytes(&self) -> &[u8] { self.groupname_bytes_impl() }
     /// See `Header::set_groupname`
-    pub fn set_groupname(&mut self, name: &str) -> io::Result<()> {
-        copy_into(&mut self.gname, name.as_bytes()).map_err(|err| {
-            io::Error::new(
-                err.kind(),
-                format!(
-                    "{} when setting groupname for {}",
-                    err,
-                    self.fullname_lossy()
-                ),
-            )
-        })
-    }
-
+    pub fn set_groupname(&mut self, name: &str) -> io::Result<()> { self.set_groupname_impl(name) }
     /// See `Header::device_major`
-    pub fn device_major(&self) -> io::Result<u32> {
-        octal_from(&self.dev_major)
-            .map(|u| u as u32)
-            .map_err(|err| {
-                io::Error::new(
-                    err.kind(),
-                    format!(
-                        "{} when getting device_major for {}",
-                        err,
-                        self.fullname_lossy()
-                    ),
-                )
-            })
-    }
-
+    pub fn device_major(&self) -> io::Result<u32> { self.device_major_impl() }
     /// See `Header::set_device_major`
-    pub fn set_device_major(&mut self, major: u32) {
-        octal_into(&mut self.dev_major, major);
-    }
-
+    pub fn set_device_major(&mut self, major: u32) { self.set_device_major_impl(major) }
     /// See `Header::device_minor`
-    pub fn device_minor(&self) -> io::Result<u32> {
-        octal_from(&self.dev_minor)
-            .map(|u| u as u32)
-            .map_err(|err| {
-                io::Error::new(
-                    err.kind(),
-                    format!(
-                        "{} when getting device_minor for {}",
-                        err,
-                        self.fullname_lossy()
-                    ),
-                )
-            })
+    pub fn device_minor(&self) -> io::Result<u32> { self.device_minor_impl() }
+    /// See `Header::set_device_minor`
+    pub fn set_device_minor(&mut self, minor: u32) { self.set_device_minor_impl(minor) }
+
+    /// Views this as a normal `Header`
+    pub fn as_header(&self) -> &Header {
+        unsafe { cast(self) }
     }
 
-    /// See `Header::set_device_minor`
-    pub fn set_device_minor(&mut self, minor: u32) {
-        octal_into(&mut self.dev_minor, minor);
+    /// Views this as a normal `Header`
+    pub fn as_header_mut(&mut self) -> &mut Header {
+        unsafe { cast_mut(self) }
     }
 
     /// Returns the last modification time in Unix time format
@@ -1213,7 +1193,7 @@ impl GnuHeader {
         num_field_wrapper_from(&self.atime).map_err(|err| {
             io::Error::new(
                 err.kind(),
-                format!("{} when getting atime for {}", err, self.fullname_lossy()),
+                format!("{} when getting atime for {}", err, self.path_lossy()),
             )
         })
     }
@@ -1231,7 +1211,7 @@ impl GnuHeader {
         num_field_wrapper_from(&self.ctime).map_err(|err| {
             io::Error::new(
                 err.kind(),
-                format!("{} when getting ctime for {}", err, self.fullname_lossy()),
+                format!("{} when getting ctime for {}", err, self.path_lossy()),
             )
         })
     }
@@ -1255,7 +1235,7 @@ impl GnuHeader {
                 format!(
                     "{} when getting real_size for {}",
                     err,
-                    self.fullname_lossy()
+                    self.path_lossy()
                 ),
             )
         })
@@ -1268,16 +1248,6 @@ impl GnuHeader {
     /// interesting if a `raw` iterator is being used.
     pub fn is_extended(&self) -> bool {
         self.isextended[0] == 1
-    }
-
-    /// Views this as a normal `Header`
-    pub fn as_header(&self) -> &Header {
-        unsafe { cast(self) }
-    }
-
-    /// Views this as a normal `Header`
-    pub fn as_header_mut(&mut self) -> &mut Header {
-        unsafe { cast_mut(self) }
     }
 }
 
