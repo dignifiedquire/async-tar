@@ -5,16 +5,12 @@ use std::os::windows::prelude::*;
 
 use std::{borrow::Cow, fmt, iter, iter::repeat, iter::repeat_n, mem, str};
 
-#[cfg(all(windows, feature = "runtime-smol"))]
-use async_fs as fs;
 #[cfg(feature = "runtime-smol")]
 use futures_lite::io;
 use std::{
     fs::Metadata,
     path::{Component, Path, PathBuf},
 };
-#[cfg(all(windows, feature = "runtime-tokio"))]
-use tokio::fs;
 #[cfg(feature = "runtime-tokio")]
 use tokio::io;
 
@@ -738,7 +734,7 @@ impl Header {
 
     #[cfg(target_arch = "wasm32")]
     #[allow(unused_variables)]
-    fn fill_platform_from(&mut self, meta: &fs::Metadata, mode: HeaderMode) {
+    fn fill_platform_from(&mut self, meta: &Metadata, mode: HeaderMode) {
         unimplemented!();
     }
 
@@ -1616,7 +1612,7 @@ fn ends_with_slash(p: &Path) -> bool {
 }
 
 #[cfg(any(windows, target_arch = "wasm32"))]
-pub fn path2bytes(p: &Path) -> io::Result<Cow<[u8]>> {
+pub fn path2bytes(p: &Path) -> io::Result<Cow<'_, [u8]>> {
     p.as_os_str()
         .to_str()
         .map(|s| s.as_bytes())
