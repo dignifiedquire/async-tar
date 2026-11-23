@@ -1,6 +1,6 @@
-use std::path::Path;
 use std::{
     cmp, mem,
+    path::Path,
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll},
@@ -224,7 +224,6 @@ impl<R: Read + Unpin> Archive<R> {
     /// a '..' in their path are skipped during the unpacking process.
     ///
     /// # Examples
-    ///
     #[cfg_attr(feature = "runtime-smol", doc = "```no_run")]
     #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {

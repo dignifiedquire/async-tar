@@ -2,15 +2,19 @@
 use std::os::unix::prelude::*;
 #[cfg(windows)]
 use std::os::windows::prelude::*;
-
-use std::{borrow::Cow, fmt, iter, iter::repeat, iter::repeat_n, mem, str};
+use std::{
+    borrow::Cow,
+    fmt,
+    fs::Metadata,
+    iter,
+    iter::{repeat, repeat_n},
+    mem,
+    path::{Component, Path, PathBuf},
+    str,
+};
 
 #[cfg(feature = "runtime-smol")]
 use futures_lite::io;
-use std::{
-    fs::Metadata,
-    path::{Component, Path, PathBuf},
-};
 #[cfg(feature = "runtime-tokio")]
 use tokio::io;
 

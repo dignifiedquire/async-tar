@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, fs::Metadata, path::Path};
 
 #[cfg(feature = "runtime-smol")]
 use async_fs as fs;
@@ -7,8 +7,6 @@ use futures_lite::{
     io::{self, AsyncRead as Read, AsyncReadExt, AsyncWrite as Write, AsyncWriteExt},
     stream::StreamExt,
 };
-use std::fs::Metadata;
-use std::path::Path;
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
     fs,
@@ -117,7 +115,6 @@ impl<W: Write + Unpin> Builder<W> {
     /// occurs when either reading or writing.
     ///
     /// # Examples
-    ///
     #[cfg_attr(feature = "runtime-smol", doc = "```")]
     #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
@@ -300,7 +297,6 @@ impl<W: Write + Unpin> Builder<W> {
     /// `finish` function needs to be called to finish writing the archive.
     ///
     /// # Examples
-    ///
     #[cfg_attr(feature = "runtime-smol", doc = "```no_run")]
     #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
@@ -341,7 +337,6 @@ impl<W: Write + Unpin> Builder<W> {
     /// `finish` function needs to be called to finish writing the archive.
     ///
     /// # Examples
-    ///
     #[cfg_attr(feature = "runtime-smol", doc = "```")]
     #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
@@ -378,7 +373,6 @@ impl<W: Write + Unpin> Builder<W> {
     /// `finish` function needs to be called to finish writing the archive.
     ///
     /// # Examples
-    ///
     #[cfg_attr(feature = "runtime-smol", doc = "```")]
     #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {

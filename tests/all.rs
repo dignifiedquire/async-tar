@@ -1,4 +1,7 @@
-use std::iter::repeat_n;
+use std::{
+    iter::repeat_n,
+    path::{Path, PathBuf},
+};
 
 use async_tar::{Archive, ArchiveBuilder, Builder, EntryType, Header};
 #[cfg(feature = "runtime-smol")]
@@ -7,7 +10,6 @@ use smol::{
     io::{self, AsyncRead as Read, AsyncReadExt, AsyncWrite as Write, AsyncWriteExt},
     stream::StreamExt,
 };
-use std::path::{Path, PathBuf};
 use tempfile::{Builder as TempBuilder, TempDir};
 #[cfg(feature = "runtime-tokio")]
 use tokio::{

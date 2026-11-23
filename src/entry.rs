@@ -1,6 +1,9 @@
+#[cfg(unix)]
+use std::fs::Permissions;
 use std::{
     borrow::Cow,
     cmp, fmt, marker,
+    path::{Component, Path, PathBuf},
     pin::Pin,
     task::{Context, Poll},
     time::{Duration, UNIX_EPOCH},
@@ -13,9 +16,6 @@ use futures_core::ready;
 use futures_lite::io::{
     self, AsyncRead as Read, AsyncReadExt, AsyncSeekExt, Error, ErrorKind, SeekFrom,
 };
-#[cfg(unix)]
-use std::fs::Permissions;
-use std::path::{Component, Path, PathBuf};
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
     fs,
@@ -227,7 +227,6 @@ impl<R: Read + Unpin> Entry<R> {
     /// > similar logic yourself.
     ///
     /// # Examples
-    ///
     #[cfg_attr(feature = "runtime-smol", doc = "```no_run")]
     #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
@@ -263,7 +262,6 @@ impl<R: Read + Unpin> Entry<R> {
     /// a '..' in its path, this function will skip it and return false.
     ///
     /// # Examples
-    ///
     #[cfg_attr(feature = "runtime-smol", doc = "```no_run")]
     #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
