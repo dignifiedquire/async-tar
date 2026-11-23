@@ -2136,6 +2136,31 @@ async fn paths_too_long_for_the_os_create_no_directories() {
     assert!(t!(std::fs::read_dir(td.path())).next().is_none());
 }
 
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn names_with_a_nul_are_rejected() {
+    let mut pax_path = Vec::new();
+    push_pax(&mut pax_path, &pax_record("path", "safe.txt\0evil.txt"));
+    push_member(&mut pax_path, EntryType::Regular);
+
+    let mut pax_link = Vec::new();
+    push_pax(&mut pax_link, &pax_record("linkpath", "safe.txt\0evil.txt"));
+    push_member(&mut pax_link, EntryType::Symlink);
+
+    let mut gnu_name = Vec::new();
+    push_gnu_long(&mut gnu_name, b'L', "safe.txt\0evil.txt");
+    push_member(&mut gnu_name, EntryType::Regular);
+
+    let mut gnu_link = Vec::new();
+    push_gnu_long(&mut gnu_link, b'K', "safe.txt\0evil.txt");
+    push_member(&mut gnu_link, EntryType::Symlink);
+
+    for tar in [pax_path, pax_link, gnu_name, gnu_link] {
+        let mut entries = t!(Archive::new(&tar[..]).entries());
+        assert!(entries.next().await.unwrap().is_err());
+    }
+}
+
 async fn is_rejected(tar: &[u8]) -> bool {
     let mut entries = t!(Archive::new(tar).entries());
     while let Some(entry) = entries.next().await {

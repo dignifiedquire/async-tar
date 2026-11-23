@@ -518,6 +518,14 @@ impl<R: Read + Unpin> Entries<R> {
                 return Poll::Ready(Some(Err(other("a name starting with a drive letter"))));
             }
 
+            // A name or link target may not contain a NUL, since a C string ends at one.
+            let is_target_nul = new_fields
+                .link_name_bytes()
+                .is_some_and(|target| target.contains(&0));
+            if path.contains(&0) || is_target_nul {
+                return Poll::Ready(Some(Err(other("a NUL in a name or link target"))));
+            }
+
             // A link's name may not end in a slash or be `.`.
             let is_link = entry_type.is_symlink() || entry_type.is_hard_link();
             let is_dir_name = path.ends_with(b"/")
