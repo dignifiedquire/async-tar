@@ -62,6 +62,32 @@ fn other(msg: &str) -> Error {
     Error::other(msg)
 }
 
+/// Runs `f` on the runtime's thread pool for blocking calls.
+#[cfg(feature = "runtime-smol")]
+async fn unblock<T, F>(f: F) -> io::Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> io::Result<T> + Send + 'static,
+{
+    blocking::unblock(f).await
+}
+
+/// Runs `f` on the runtime's thread pool for blocking calls.
+#[cfg(feature = "runtime-tokio")]
+async fn unblock<T, F>(f: F) -> io::Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> io::Result<T> + Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(result) => result,
+        Err(err) => match err.try_into_panic() {
+            Ok(panic) => std::panic::resume_unwind(panic),
+            Err(err) => Err(io::Error::other(err)),
+        },
+    }
+}
+
 /// Copies `reader` to `writer` in chunks of up to 128 KiB, flushes `writer`, and returns the
 /// bytes copied.
 ///
