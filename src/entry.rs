@@ -509,7 +509,8 @@ impl<R: Read + Unpin> EntryFields<R> {
             Ok(()) => Ok(()),
             Err(err) => {
                 if err.kind() == ErrorKind::AlreadyExists {
-                    let prev = fs::metadata(dst).await;
+                    // A symlink must fail here, or set_perms would chmod its target.
+                    let prev = symlink_metadata(dst).await;
                     if prev.map(|m| m.is_dir()).unwrap_or(false) {
                         return Ok(());
                     }
