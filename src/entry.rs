@@ -636,6 +636,8 @@ impl<R: Read + Unpin> EntryFields<R> {
             || kind.is_pax_local_extensions()
             || kind.is_gnu_longname()
             || kind.is_gnu_longlink()
+            // Typeflag V is a GNU volume label, the name of the archive.
+            || kind.as_byte() == b'V'
         {
             return Ok(Unpacked::Other);
         };

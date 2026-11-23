@@ -1953,3 +1953,22 @@ async fn empty_pax_path_is_rejected() {
     push_member(&mut tar, EntryType::Regular);
     assert_eq!(read_entries(&tar[..]).await[0].0, b"from-pax");
 }
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn gnu_volume_label_is_not_unpacked() {
+    let mut label = Header::new_gnu();
+    t!(label.set_path("label"));
+    label.set_entry_type(EntryType::new(b'V'));
+    label.set_size(0);
+    label.set_cksum();
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, label.as_bytes());
+    push_member(&mut tar, EntryType::Regular);
+
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
+    t!(Archive::new(&tar[..]).unpack(td.path()).await);
+    assert!(td.path().join("from-header").exists());
+    assert!(!td.path().join("label").exists());
+}
