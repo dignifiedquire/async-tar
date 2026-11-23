@@ -2102,3 +2102,23 @@ async fn pax_header_in_v7_archive_is_rejected() {
     tar.extend(repeat(0u8).take(BLOCK * 2));
     assert_eq!(read_entries(&tar[..]).await.len(), 2);
 }
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn gnu_long_name_without_nul_is_rejected() {
+    for (typeflag, body) in [(b'L', &b"name"[..]), (b'K', b"target"), (b'L', b"")] {
+        let mut long = Header::new_gnu();
+        t!(long.set_path("././@LongLink"));
+        long.set_entry_type(EntryType::new(typeflag));
+        long.set_size(body.len() as u64);
+        long.set_cksum();
+
+        let mut tar = Vec::new();
+        push_block(&mut tar, long.as_bytes());
+        if !body.is_empty() {
+            push_block(&mut tar, &[body, b"-rest"].concat());
+        }
+        push_member(&mut tar, EntryType::Symlink);
+        assert!(is_rejected(&tar).await, "{}", typeflag as char);
+    }
+}

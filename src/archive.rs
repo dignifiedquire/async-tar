@@ -402,6 +402,10 @@ impl<R: Read + Unpin> Entries<R> {
                 }
 
                 ready_err!(Pin::new(new_fields).poll_read_all(cx, extension_body));
+                // GNU tar reads past a long name without its NUL, async-tar did not.
+                if extension_body.last() != Some(&0) {
+                    return Poll::Ready(Some(Err(other("a GNU long name or link without a NUL"))));
+                }
                 *gnu_longname = Some(mem::take(extension_body));
                 *fields = None;
                 continue;
@@ -415,6 +419,10 @@ impl<R: Read + Unpin> Entries<R> {
                     ))));
                 }
                 ready_err!(Pin::new(new_fields).poll_read_all(cx, extension_body));
+                // GNU tar reads past a long name without its NUL, async-tar did not.
+                if extension_body.last() != Some(&0) {
+                    return Poll::Ready(Some(Err(other("a GNU long name or link without a NUL"))));
+                }
                 *gnu_longlink = Some(mem::take(extension_body));
                 *fields = None;
                 continue;
