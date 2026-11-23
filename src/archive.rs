@@ -31,7 +31,7 @@ use crate::{
     symlink_metadata,
 };
 
-/// The largest GNU long name or link and pax header body read into memory, as in Go.
+/// The largest extension header or GNU sparse map read into memory, as Go caps them.
 const MAX_EXTENSION_SIZE: u64 = 1 << 20;
 
 /// A top-level representation of an archive file.
@@ -863,6 +863,9 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
         .last()
         .map_or(gnu.is_extended(), |ext| ext.is_extended())
     {
+        if ext_headers.len() as u64 >= MAX_EXTENSION_SIZE / 512 {
+            return Poll::Ready(Err(other("a GNU sparse map larger than 1 MiB")));
+        }
         if current_ext.is_none() {
             *current_ext_pos = 0;
         }
