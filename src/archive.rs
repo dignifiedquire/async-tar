@@ -499,6 +499,16 @@ impl<R: Read + Unpin> Entries<R> {
                 return Poll::Ready(Some(Err(other("an empty pax path or linkpath"))));
             }
 
+            // A reader splitting pax records at newlines reads another name.
+            let has_newline = |key: &[u8]| {
+                new_fields
+                    .pax_value(key)
+                    .is_some_and(|value| value.contains(&b'\n'))
+            };
+            if has_newline(b"path") || has_newline(b"linkpath") {
+                return Poll::Ready(Some(Err(other("a newline in a pax path or linkpath"))));
+            }
+
             let State {
                 next,
                 current_header_pos,

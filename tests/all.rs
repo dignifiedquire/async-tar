@@ -2157,3 +2157,17 @@ async fn pax_global_size_path_or_linkpath_is_rejected() {
         b"from-header"
     );
 }
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn newline_in_pax_path_is_rejected() {
+    for (key, entry_type) in [
+        ("path", EntryType::Regular),
+        ("linkpath", EntryType::Symlink),
+    ] {
+        let mut tar = Vec::new();
+        push_pax(&mut tar, &pax_record(key, "a\nb"));
+        push_member(&mut tar, entry_type);
+        assert!(is_rejected(&tar).await, "{key}");
+    }
+}
