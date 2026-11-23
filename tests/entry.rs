@@ -1,13 +1,13 @@
 #[cfg(feature = "runtime-smol")]
 use smol::{
-    fs::{self, File, create_dir},
+    fs::{self, File},
     io::AsyncReadExt,
     stream::StreamExt,
 };
 
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
-    fs::{self, File, create_dir},
+    fs::{self, File},
     io::AsyncReadExt,
 };
 #[cfg(feature = "runtime-tokio")]
@@ -261,7 +261,7 @@ async fn modify_outside_with_relative_symlink() {
 
     let td = t!(Builder::new().prefix("tar").tempdir());
     let tar_dir = td.path().join("tar");
-    create_dir(&tar_dir).await.unwrap();
+    fs::create_dir(&tar_dir).await.unwrap();
     assert!(ar.unpack(tar_dir).await.is_err());
     assert!(!td.path().join("foo").exists());
 }
@@ -435,7 +435,7 @@ async fn chmod_outside_with_directory_over_symlink() {
     let ar = async_tar::Archive::new(&bytes[..]);
 
     let tar_dir = td.path().join("tar");
-    create_dir(&tar_dir).await.unwrap();
+    fs::create_dir(&tar_dir).await.unwrap();
     assert!(ar.unpack(tar_dir).await.is_err());
     let mode = t!(std::fs::metadata(&outside)).permissions().mode();
     assert_eq!(mode & 0o777, 0o700);
