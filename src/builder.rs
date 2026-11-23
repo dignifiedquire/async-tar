@@ -409,7 +409,9 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
         Ok(())
     }
 
-    /// Finish writing this archive, emitting the termination sections.
+    /// Finish writing this archive, emitting the two zero blocks ending it.
+    ///
+    /// A tar archive has no index, only these end blocks.
     ///
     /// This function should only be called when the archive has been written
     /// entirely and if an I/O error happens the underlying object still needs
