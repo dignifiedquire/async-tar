@@ -1,0 +1,107 @@
+# Use cargo-make to run tasks here: https://crates.io/crates/cargo-make
+
+[config]
+skip_core_tasks = true
+
+[env]
+CARGO_BUILD_WARNINGS = "deny"
+
+[tasks.default]
+alias = "dev-flow"
+
+[tasks.dev-flow]
+description = "Fast local sub-set of all CI checks"
+dependencies = [
+     "format-check",
+     "check",
+     "clippy",
+     "doc",
+     "test",
+]
+
+[tasks.format]
+description = "Format the rust files following style rules"
+command = "cargo"
+args = [
+     "fmt",
+     "--all",
+     "--",
+     "--config",
+     "unstable_features=true",
+     "--config",
+     "imports_granularity=Crate,group_imports=StdExternalCrate,reorder_imports=true,format_code_in_doc_comments=true",
+]
+
+[tasks.format-check]
+description = "Check the rust files for formatting style"
+command = "cargo"
+args = [
+     "fmt",
+     "--all",
+     "--check",
+     "--",
+     "--config",
+     "unstable_features=true",
+     "--config",
+     "imports_granularity=Crate,group_imports=StdExternalCrate,reorder_imports=true,format_code_in_doc_comments=true",
+]
+
+# The runtime features exclude each other, so tasks run once per runtime
+# instead of with --all-features.
+[tasks.check]
+description = "Run cargo-check for both runtimes"
+dependencies = ["check-smol", "check-tokio"]
+
+[tasks.check-smol]
+description = "Run cargo-check with the smol runtime"
+# Allows us to use CARGO_BUILD_WARNINGS instead of
+# RUSTFLAGS=-Dwarnings which breaks the build cache.
+toolchain = { channel = "stable", min_version = "1.97.0" }
+command = "cargo"
+args = ["check", "--all-targets"]
+
+[tasks.check-tokio]
+description = "Run cargo-check with the tokio runtime"
+toolchain = { channel = "stable", min_version = "1.97.0" }
+command = "cargo"
+args = ["check", "--all-targets", "--no-default-features", "--features", "runtime-tokio"]
+
+[tasks.clippy]
+description = "Run cargo-clippy for both runtimes"
+dependencies = ["clippy-smol", "clippy-tokio"]
+
+[tasks.clippy-smol]
+description = "Run cargo-clippy with the smol runtime"
+# Allows us to use CARGO_BUILD_WARNINGS instead of
+# RUSTFLAGS=-Dwarnings which breaks the build cache.
+toolchain = { channel = "stable", min_version = "1.97.0" }
+command = "cargo"
+args = ["clippy", "--all-targets"]
+
+[tasks.clippy-tokio]
+description = "Run cargo-clippy with the tokio runtime"
+toolchain = { channel = "stable", min_version = "1.97.0" }
+command = "cargo"
+args = ["clippy", "--all-targets", "--no-default-features", "--features", "runtime-tokio"]
+
+[tasks.doc]
+description = "Check the documentation build"
+# Allows us to use CARGO_BUILD_WARNINGS instead of
+# RUSTDOCFLAGS=-Dwarnings which breaks the build cache.
+toolchain = { channel = "stable", min_version = "1.97.0" }
+command = "cargo"
+args = ["doc", "--no-deps", "--document-private-items"]
+
+[tasks.test]
+description = "Run unit tests for both runtimes"
+dependencies = ["test-smol", "test-tokio"]
+
+[tasks.test-smol]
+description = "Run unit tests with the smol runtime"
+command = "cargo"
+args = ["nextest", "run", "--no-fail-fast"]
+
+[tasks.test-tokio]
+description = "Run unit tests with the tokio runtime"
+command = "cargo"
+args = ["nextest", "run", "--no-fail-fast", "--no-default-features", "--features", "runtime-tokio"]
