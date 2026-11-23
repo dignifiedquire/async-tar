@@ -164,7 +164,9 @@ impl<W: Write + Unpin> Builder<W> {
     /// # Errors
     ///
     /// This function will return an error for any intermittent I/O error which
-    /// occurs when either reading or writing.
+    /// occurs when either reading or writing, or if `data` is shorter or longer
+    /// than the header's size. If a failure leaves the entry incomplete, every
+    /// later append and `finish` fail.
     ///
     /// # Examples
     #[cfg_attr(feature = "runtime-smol", doc = "```")]
@@ -219,7 +221,9 @@ impl<W: Write + Unpin> Builder<W> {
     /// # Errors
     ///
     /// This function will return an error for any intermittent I/O error which
-    /// occurs when either reading or writing.
+    /// occurs when either reading or writing, or if `data` is shorter or longer
+    /// than the header's size. If a failure leaves the entry incomplete, every
+    /// later append and `finish` fail.
     ///
     /// # Examples
     ///
@@ -497,10 +501,18 @@ where
     W: Write + Unpin + ?Sized,
     R: Read + Unpin + ?Sized,
 {
+    let size = header.entry_size()?;
     let mut member = dst.begin()?;
     member.writer().write_all(extensions).await?;
     append(member.writer(), header, data).await?;
     member.end();
+
+    // The member is complete, so extra data fails the append but not the builder.
+    if data.read(&mut [0]).await? != 0 {
+        return Err(other(&format!(
+            "member data is longer than its header size of {size}"
+        )));
+    }
     Ok(())
 }
 
@@ -509,8 +521,14 @@ where
     W: Write + Unpin + ?Sized,
     R: Read + Unpin + ?Sized,
 {
+    let size = header.entry_size()?;
     dst.write_all(header.as_bytes()).await?;
-    let len = io::copy(&mut *data, &mut *dst).await?;
+    let len = io::copy(&mut (&mut *data).take(size), &mut *dst).await?;
+    if len < size {
+        return Err(other(&format!(
+            "member data of {len} bytes is shorter than its header size of {size}"
+        )));
+    }
 
     // Pad with zeros if necessary.
     let buf = [0; 512];
@@ -920,14 +938,6 @@ mod tests {
         }
     }
 
-    fn empty_member(path: &str) -> Header {
-        let mut header = Header::new_gnu();
-        header.set_path(path).unwrap();
-        header.set_size(0);
-        header.set_cksum();
-        header
-    }
-
     #[cfg_attr(
         feature = "runtime-smol",
         macro_rules_attribute::apply(smol_macros::test!)
@@ -946,7 +956,7 @@ mod tests {
         assert!(ar.append(&header, &[1; 1024][..]).await.is_err());
         let written = ar.get_ref().written.len();
 
-        assert!(ar.append(&empty_member("b"), &[][..]).await.is_err());
+        assert!(ar.append(&member("b", 0), &[][..]).await.is_err());
         assert!(ar.finish().await.is_err());
         assert_eq!(ar.get_ref().written.len(), written);
     }
@@ -963,7 +973,7 @@ mod tests {
             is_stuck: true,
         });
         let mut cx = Context::from_waker(std::task::Waker::noop());
-        let header = empty_member("a");
+        let header = member("a", 0);
         {
             let mut append = std::pin::pin!(ar.append(&header, &[][..]));
             assert!(append.as_mut().poll(&mut cx).is_pending());
@@ -971,6 +981,41 @@ mod tests {
 
         let mut append = std::pin::pin!(ar.append(&header, &[][..]));
         assert!(matches!(append.as_mut().poll(&mut cx), Poll::Ready(Err(_))));
+    }
+
+    fn member(path: &str, size: u64) -> Header {
+        let mut header = Header::new_gnu();
+        header.set_path(path).unwrap();
+        header.set_size(size);
+        header.set_cksum();
+        header
+    }
+
+    #[cfg_attr(
+        feature = "runtime-smol",
+        macro_rules_attribute::apply(smol_macros::test!)
+    )]
+    #[cfg_attr(feature = "runtime-tokio", tokio::test)]
+    async fn short_data_poisons_the_builder() {
+        let mut ar = Builder::new(Vec::new());
+        assert!(ar.append(&member("a", 1024), &[1; 100][..]).await.is_err());
+        assert!(ar.append(&member("b", 0), &[][..]).await.is_err());
+    }
+
+    #[cfg_attr(
+        feature = "runtime-smol",
+        macro_rules_attribute::apply(smol_macros::test!)
+    )]
+    #[cfg_attr(feature = "runtime-tokio", tokio::test)]
+    async fn long_data_fails_without_poisoning_the_builder() {
+        let mut ar = Builder::new(Vec::new());
+        assert!(ar.append(&member("a", 4), &b"abcdefgh"[..]).await.is_err());
+        ar.append(&member("b", 2), &b"ok"[..]).await.unwrap();
+        let tar = ar.into_inner().await.unwrap();
+
+        assert_eq!(tar.len(), 6 * 512);
+        assert_eq!(&tar[512..516], b"abcd");
+        assert_eq!(&tar[1536..1538], b"ok");
     }
 
     fn assert_send<T: Send>(_: &T) {}

@@ -555,8 +555,6 @@ async fn unpack_old_style_bsd_dir() {
 async fn handling_incorrect_file_size() {
     let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
 
-    let mut ar = Builder::new(Vec::new());
-
     let path = td.path().join("tmpfile");
     t!(File::create(&path).await);
     let mut file = t!(File::open(&path).await);
@@ -565,10 +563,12 @@ async fn handling_incorrect_file_size() {
     header.set_metadata(&t!(file.metadata().await));
     header.set_size(2048); // past the end of file null blocks
     header.set_cksum();
-    t!(ar.append(&header, &mut file).await);
+    let mut ar = Builder::new(Vec::new());
+    assert!(ar.append(&header, &mut file).await.is_err());
 
     // Extracting
-    let rdr: Vec<u8> = t!(ar.into_inner().await);
+    let mut rdr = header.as_bytes().to_vec();
+    rdr.extend([0; 1024]);
     println!("extracting");
     let ar = Archive::new(&rdr[..]);
     assert!(ar.clone().unpack(td.path()).await.is_err());
