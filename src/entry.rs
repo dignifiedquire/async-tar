@@ -415,7 +415,7 @@ impl<R: Read + Unpin> EntryFields<R> {
         }
     }
 
-    fn link_name_bytes(&self) -> Option<Cow<'_, [u8]>> {
+    pub(crate) fn link_name_bytes(&self) -> Option<Cow<'_, [u8]>> {
         match self.long_linkname {
             Some(ref bytes) => {
                 if let Some(&0) = bytes.last() {

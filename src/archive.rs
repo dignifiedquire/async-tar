@@ -527,6 +527,14 @@ impl<R: Read + Unpin> Entries<R> {
                 return Poll::Ready(Some(Err(other("a link named like a directory"))));
             }
 
+            // Readers decode a non-UTF-8 link target in different encodings.
+            let is_target_utf8 = new_fields
+                .link_name_bytes()
+                .is_none_or(|target| std::str::from_utf8(&target).is_ok());
+            if is_link && !is_target_utf8 {
+                return Poll::Ready(Some(Err(other("a link target that is not UTF-8"))));
+            }
+
             let State {
                 next,
                 current_header_pos,

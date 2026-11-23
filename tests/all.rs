@@ -2207,3 +2207,25 @@ async fn link_named_like_directory_is_rejected() {
         assert!(is_rejected(&tar).await, "{}", String::from_utf8_lossy(name));
     }
 }
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn link_target_not_utf8_is_rejected() {
+    let mut in_header = Vec::new();
+    let mut header = Header::new_gnu();
+    t!(header.set_path("link"));
+    header.set_entry_type(EntryType::Symlink);
+    header.as_mut_bytes()[157..161].copy_from_slice(b"caf\xe9");
+    header.set_size(0);
+    header.set_cksum();
+    push_block(&mut in_header, header.as_bytes());
+    in_header.extend(repeat(0u8).take(BLOCK * 2));
+
+    let mut in_pax = Vec::new();
+    push_pax(&mut in_pax, b"17 linkpath=caf\xe9\n");
+    push_member(&mut in_pax, EntryType::Symlink);
+
+    for tar in [in_header, in_pax] {
+        assert!(is_rejected(&tar).await);
+    }
+}
