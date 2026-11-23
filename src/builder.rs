@@ -33,14 +33,14 @@ use crate::{
 ///
 /// [`into_inner`]: Builder::into_inner
 /// [`finish`]: Builder::finish
-pub struct Builder<W: Write + Unpin + Send + Sync> {
+pub struct Builder<W: Write + Unpin> {
     mode: HeaderMode,
     follow: bool,
     finished: bool,
     obj: Option<W>,
 }
 
-impl<W: Write + Unpin + Send + Sync> Builder<W> {
+impl<W: Write + Unpin> Builder<W> {
     /// Create a new archive builder with the underlying object as the
     /// destination of all data written. The builder will use
     /// `HeaderMode::Complete` by default.
@@ -134,7 +134,7 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// #
     /// # Ok(()) }) }
     /// ```
-    pub async fn append<R: Read + Unpin + Send>(
+    pub async fn append<R: Read + Unpin>(
         &mut self,
         header: &Header,
         mut data: R,
@@ -188,7 +188,7 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// #
     /// # Ok(()) }) }
     /// ```
-    pub async fn append_data<P: AsRef<Path>, R: Read + Unpin + Send>(
+    pub async fn append_data<P: AsRef<Path>, R: Read + Unpin>(
         &mut self,
         header: &mut Header,
         path: P,
@@ -426,13 +426,13 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     }
 }
 
-async fn append(
-    mut dst: &mut (dyn Write + Unpin + Send),
-    header: &Header,
-    mut data: &mut (dyn Read + Unpin + Send),
-) -> io::Result<()> {
+async fn append<W, R>(dst: &mut W, header: &Header, data: &mut R) -> io::Result<()>
+where
+    W: Write + Unpin + ?Sized,
+    R: Read + Unpin + ?Sized,
+{
     dst.write_all(header.as_bytes()).await?;
-    let len = io::copy(&mut data, &mut dst).await?;
+    let len = io::copy(&mut *data, &mut *dst).await?;
 
     // Pad with zeros if necessary.
     let buf = [0; 512];
@@ -444,8 +444,8 @@ async fn append(
     Ok(())
 }
 
-async fn append_path_with_name(
-    dst: &mut (dyn Write + Unpin + Sync + Send),
+async fn append_path_with_name<W: Write + Unpin + ?Sized>(
+    dst: &mut W,
     path: &Path,
     name: Option<&Path>,
     mode: HeaderMode,
@@ -498,8 +498,8 @@ async fn append_path_with_name(
     }
 }
 
-async fn append_file(
-    dst: &mut (dyn Write + Unpin + Send + Sync),
+async fn append_file<W: Write + Unpin + ?Sized>(
+    dst: &mut W,
     path: &Path,
     file: &mut fs::File,
     mode: HeaderMode,
@@ -509,8 +509,8 @@ async fn append_file(
     Ok(())
 }
 
-async fn append_dir(
-    dst: &mut (dyn Write + Unpin + Send + Sync),
+async fn append_dir<W: Write + Unpin + ?Sized>(
+    dst: &mut W,
     path: &Path,
     src_path: &Path,
     mode: HeaderMode,
@@ -535,8 +535,8 @@ fn prepare_header(size: u64, entry_type: EntryType) -> Header {
     header
 }
 
-async fn prepare_header_path(
-    dst: &mut (dyn Write + Unpin + Send + Sync),
+async fn prepare_header_path<W: Write + Unpin + ?Sized>(
+    dst: &mut W,
     header: &mut Header,
     path: &Path,
 ) -> io::Result<()> {
@@ -564,8 +564,8 @@ async fn prepare_header_path(
     Ok(())
 }
 
-async fn prepare_header_link(
-    dst: &mut (dyn Write + Unpin + Send + Sync),
+async fn prepare_header_link<W: Write + Unpin + ?Sized>(
+    dst: &mut W,
     header: &mut Header,
     link_name: &Path,
 ) -> io::Result<()> {
@@ -582,8 +582,8 @@ async fn prepare_header_link(
     Ok(())
 }
 
-async fn append_fs(
-    dst: &mut (dyn Write + Unpin + Send + Sync),
+async fn append_fs<W: Write + Unpin + ?Sized>(
+    dst: &mut W,
     path: &Path,
     meta: &Metadata,
     read: &mut (dyn Read + Unpin + Sync + Send),
@@ -603,8 +603,8 @@ async fn append_fs(
     Ok(())
 }
 
-async fn append_dir_all(
-    dst: &mut (dyn Write + Unpin + Send + Sync),
+async fn append_dir_all<W: Write + Unpin + ?Sized>(
+    dst: &mut W,
     path: &Path,
     src_path: &Path,
     mode: HeaderMode,
@@ -647,7 +647,7 @@ async fn append_dir_all(
 }
 
 #[cfg(feature = "runtime-smol")]
-impl<W: Write + Unpin + Send + Sync> Drop for Builder<W> {
+impl<W: Write + Unpin> Drop for Builder<W> {
     fn drop(&mut self) {
         futures_lite::future::block_on(async move {
             let _ = self.finish().await;
@@ -656,7 +656,7 @@ impl<W: Write + Unpin + Send + Sync> Drop for Builder<W> {
 }
 
 #[cfg(feature = "runtime-tokio")]
-impl<W: Write + Unpin + Send + Sync> Drop for Builder<W> {
+impl<W: Write + Unpin> Drop for Builder<W> {
     fn drop(&mut self) {
         if !self.finished && !std::thread::panicking() && self.obj.is_some() {
             panic!("Builder dropped without finalizing; call finish() or into_inner()");
@@ -666,8 +666,99 @@ impl<W: Write + Unpin + Send + Sync> Drop for Builder<W> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        cell::RefCell,
+        pin::Pin,
+        rc::Rc,
+        task::{Context, Poll},
+    };
+
     use super::*;
 
     assert_impl_all!(fs::File: Send, Sync);
     assert_impl_all!(Builder<fs::File>: Send, Sync);
+
+    struct RcWriter(Rc<RefCell<Vec<u8>>>);
+
+    #[cfg(feature = "runtime-smol")]
+    impl Write for RcWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[cfg(feature = "runtime-tokio")]
+    impl Write for RcWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[cfg_attr(
+        feature = "runtime-smol",
+        macro_rules_attribute::apply(smol_macros::test!)
+    )]
+    #[cfg_attr(feature = "runtime-tokio", tokio::test)]
+    async fn append_with_non_send_writer() {
+        let written = Rc::new(RefCell::new(Vec::new()));
+        let mut ar = Builder::new(RcWriter(written.clone()));
+        let mut header = Header::new_gnu();
+        header.set_path("foo").unwrap();
+        header.set_size(4);
+        header.set_cksum();
+        ar.append(&header, &b"abcd"[..]).await.unwrap();
+        ar.finish().await.unwrap();
+
+        let bytes = written.borrow().clone();
+        let mut entries = crate::Archive::new(&bytes[..]).entries().unwrap();
+        let mut entry = entries.next().await.unwrap().unwrap();
+        assert_eq!(&*entry.path_bytes(), b"foo");
+        let mut contents = Vec::new();
+        entry.read_to_end(&mut contents).await.unwrap();
+        assert_eq!(contents, b"abcd");
+        assert!(entries.next().await.is_none());
+    }
+
+    fn assert_send<T: Send>(_: &T) {}
+
+    #[test]
+    fn futures_with_send_writer_are_send() {
+        fn check(ar: &mut Builder<fs::File>, file: &mut fs::File, header: &mut Header) {
+            assert_send(&ar.append(header, &b""[..]));
+            assert_send(&ar.append_data(header, "a", &b""[..]));
+            assert_send(&ar.append_path("a"));
+            assert_send(&ar.append_path_with_name("a", "b"));
+            assert_send(&ar.append_file("a", file));
+            assert_send(&ar.append_dir("a", "b"));
+            assert_send(&ar.append_dir_all("a", "b"));
+            assert_send(&ar.finish());
+        }
+        let _ = check;
+    }
 }
