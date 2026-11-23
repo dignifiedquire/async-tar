@@ -2123,6 +2123,19 @@ async fn extension_headers_over_one_mib_are_rejected() {
     }
 }
 
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn paths_too_long_for_the_os_create_no_directories() {
+    let mut tar = Vec::new();
+    push_gnu_long(&mut tar, b'L', &format!("{}file", "a/".repeat(20_000)));
+    push_file(&mut tar, "from-header", b"");
+    tar.extend(repeat_n(0u8, BLOCK * 2));
+
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
+    assert!(Archive::new(&tar[..]).unpack(td.path()).await.is_err());
+    assert!(t!(std::fs::read_dir(td.path())).next().is_none());
+}
+
 async fn is_rejected(tar: &[u8]) -> bool {
     let mut entries = t!(Archive::new(tar).entries());
     while let Some(entry) = entries.next().await {

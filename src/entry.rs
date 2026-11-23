@@ -873,7 +873,11 @@ impl<R: Read + Unpin> EntryFields<R> {
         let mut ancestor = dir;
         let mut dirs_to_create = Vec::new();
 
-        while symlink_metadata(ancestor).await.is_err() {
+        // Any error but NotFound, such as a path too long for the OS, ends the walk.
+        while let Err(err) = symlink_metadata(ancestor).await {
+            if err.kind() != ErrorKind::NotFound {
+                return Err(err);
+            }
             dirs_to_create.push(ancestor);
             if let Some(parent) = ancestor.parent() {
                 ancestor = parent;
