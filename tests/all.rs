@@ -192,7 +192,7 @@ async fn large_filename() {
     let path = td.path().join("test");
     t!(create_file_with_contents(&path, b"test").await);
 
-    let filename = "abcd/".repeat(50);
+    let filename = format!("{}file", "abcd/".repeat(50));
     let mut header = Header::new_ustar();
     header.set_path(&filename).unwrap();
     header.set_metadata(&t!(fs::metadata(&path).await));
@@ -596,9 +596,11 @@ async fn extracting_malicious_tarball() {
                     *a = *b;
                 }
             }
-            header.set_size(1);
+            // A name ending in a slash may not carry data.
+            let size = u64::from(!path.ends_with('/'));
+            header.set_size(size);
             header.set_cksum();
-            t!(a.append(&header, io::repeat(1).take(1)).await);
+            t!(a.append(&header, io::repeat(1).take(size)).await);
         }
 
         append(&mut a, "/tmp/abs_evil.txt").await;
@@ -2021,6 +2023,37 @@ async fn sizes_beyond_i64_max_are_rejected() {
             let mut entries = t!(Archive::new(&tar[..]).entries());
             assert!(entries.next().await.unwrap().is_err());
             assert!(entries.next().await.is_none());
+        }
+    }
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn names_ending_in_a_slash_with_data_are_rejected() {
+    let mut smuggled = Vec::new();
+    push_file(&mut smuggled, "smuggled.txt", b"");
+    for header in [Header::new_old(), Header::new_gnu(), Header::new_ustar()] {
+        for typeflag in [b'0', 0, b'7'] {
+            let mut slash = header.clone();
+            t!(slash.set_path("a/"));
+            slash.as_old_mut().linkflag = [typeflag];
+            slash.set_size(smuggled.len() as u64);
+            slash.set_cksum();
+            let mut tar = Vec::new();
+            push_block(&mut tar, slash.as_bytes());
+            tar.extend(&smuggled);
+            tar.extend(repeat_n(0u8, BLOCK * 2));
+
+            let mut entries = t!(Archive::new(&tar[..]).entries());
+            assert!(entries.next().await.unwrap().is_err());
+            assert!(entries.next().await.is_none());
+
+            slash.set_size(0);
+            slash.set_cksum();
+            let mut tar = Vec::new();
+            push_block(&mut tar, slash.as_bytes());
+            tar.extend(repeat_n(0u8, BLOCK * 2));
+            assert_eq!(read_entries(&tar[..]).await.len(), 1);
         }
     }
 }

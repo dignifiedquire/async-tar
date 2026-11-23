@@ -523,6 +523,13 @@ impl<R: Read + Unpin> Entries<R> {
                 return Poll::Ready(Some(Err(other("a link named like a directory"))));
             }
 
+            // A name ending in a slash names a directory, so its member may not carry data.
+            if path.ends_with(b"/") && new_fields.size != 0 {
+                return Poll::Ready(Some(Err(other(
+                    "a name ending in a slash on a member with data",
+                ))));
+            }
+
             // A link's target must be UTF-8.
             let is_target_utf8 = new_fields
                 .link_name_bytes()
