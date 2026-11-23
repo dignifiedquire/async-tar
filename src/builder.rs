@@ -523,7 +523,7 @@ where
 {
     let size = header.entry_size()?;
     dst.write_all(header.as_bytes()).await?;
-    let len = io::copy(&mut (&mut *data).take(size), &mut *dst).await?;
+    let len = crate::copy(&mut (&mut *data).take(size), &mut *dst, size).await?;
     if len < size {
         return Err(other(&format!(
             "member data of {len} bytes is shorter than its header size of {size}"

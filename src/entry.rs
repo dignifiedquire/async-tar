@@ -722,7 +722,7 @@ impl<R: Read + Unpin> EntryFields<R> {
                 match io {
                     EntryIo::Data(mut d) => {
                         let expected = d.limit();
-                        if io::copy(&mut d, &mut f).await? != expected {
+                        if crate::copy(&mut d, &mut f, expected).await? != expected {
                             return Err(other("failed to write entire file"));
                         }
                     }
