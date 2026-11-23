@@ -197,6 +197,12 @@ impl Header {
         ustar.magic[..] == b"ustar "[..] && ustar.version[..] == b" \0"[..]
     }
 
+    pub(crate) fn has_unknown_version(&self) -> bool {
+        let ustar = unsafe { cast::<_, UstarHeader>(self) };
+        let has_magic = ustar.magic[..] == b"ustar\0"[..] || ustar.magic[..] == b"ustar "[..];
+        has_magic && !self.is_ustar() && !self.is_gnu()
+    }
+
     /// View this archive header as a raw "old" archive header.
     ///
     /// This view will always succeed as all archive header formats will fill
@@ -306,7 +312,7 @@ impl Header {
     ///
     /// May return an error if the field is corrupted.
     pub fn entry_size(&self) -> io::Result<u64> {
-        num_field_wrapper_from(&self.as_old().size).map_err(|err| {
+        size_from(&self.as_old().size).map_err(|err| {
             io::Error::new(
                 err.kind(),
                 format!("{} when getting size for {}", err, self.path_lossy()),
@@ -1426,13 +1432,28 @@ fn num_field_wrapper_into(dst: &mut [u8], src: u64) {
     }
 }
 
+/// Returns the value of a size field.
+///
+/// An all-NUL field, as on GNU volume labels, is 0. An octal size has no sign
+/// and ends in a NUL or space.
+fn size_from(field: &[u8]) -> io::Result<u64> {
+    if field.iter().all(|b| *b == 0) {
+        return Ok(0);
+    }
+    let is_octal = field[0] & 0x80 == 0;
+    if is_octal && (field.contains(&b'+') || !matches!(field.last(), Some(0 | b' '))) {
+        return Err(other("size field has a sign or no terminator"));
+    }
+    num_field_wrapper_from(field)
+}
+
 // Wrapper to figure out if we should read the header field in binary (numeric
 // extension) or octal (standard encoding).
 fn num_field_wrapper_from(src: &[u8]) -> io::Result<u64> {
     if src[0] & 0x80 == 0 {
         octal_from(src)
     } else {
-        Ok(numeric_extended_from(src))
+        numeric_extended_from(src)
     }
 }
 
@@ -1451,7 +1472,7 @@ fn numeric_extended_into(dst: &mut [u8], src: u64) {
     dst[0] |= 0x80;
 }
 
-fn numeric_extended_from(src: &[u8]) -> u64 {
+fn numeric_extended_from(src: &[u8]) -> io::Result<u64> {
     let mut dst: u64 = 0;
     let mut b_to_skip = 1;
     if src.len() == 8 {
@@ -1460,12 +1481,15 @@ fn numeric_extended_from(src: &[u8]) -> u64 {
     } else {
         // only read last 8 bytes
         b_to_skip = src.len() - 8;
+        if src[0] != 0x80 || src[1..b_to_skip].iter().any(|b| *b != 0) {
+            return Err(other("base-256 number does not fit in 64 bits"));
+        }
     }
     for byte in src.iter().skip(b_to_skip) {
         dst <<= 8;
         dst |= *byte as u64;
     }
-    dst
+    Ok(dst)
 }
 
 fn truncate(slice: &[u8]) -> &[u8] {

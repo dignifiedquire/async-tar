@@ -186,6 +186,7 @@ impl<R: Read + Unpin> Archive<R> {
             gnu_longlink: None,
             gnu_longname: None,
             pax_extensions: None,
+            is_v7_archive: None,
             is_done: false,
         })
     }
@@ -297,6 +298,7 @@ pub struct Entries<R: Read + Unpin> {
     gnu_longname: Option<Vec<u8>>,
     gnu_longlink: Option<Vec<u8>>,
     pax_extensions: Option<Vec<u8>>,
+    is_v7_archive: Option<bool>,
     is_done: bool,
 }
 
@@ -333,6 +335,7 @@ impl<R: Read + Unpin> Entries<R> {
                 gnu_longlink,
                 archive,
                 pax_extensions,
+                is_v7_archive,
                 ..
             } = &mut *self;
             let State {
@@ -376,6 +379,17 @@ impl<R: Read + Unpin> Entries<R> {
                     "Solaris extended headers are not supported",
                 ))));
             }
+            // An archive whose first header has no magic is v7 and has no pax headers.
+            let is_v7_archive = *is_v7_archive.get_or_insert(!is_recognized_header);
+            let is_pax =
+                entry_type.is_pax_local_extensions() || entry_type.is_pax_global_extensions();
+            if is_v7_archive && is_pax {
+                return Poll::Ready(Some(Err(other("a pax header in a v7 archive"))));
+            }
+            // An entry type this crate does not read is an error, except a GNU volume label.
+            if matches!(entry_type, EntryType::Other(byte) if byte != b'V') {
+                return Poll::Ready(Some(Err(other("an entry type async-tar does not read"))));
+            }
 
             if is_recognized_header && new_fields.header.entry_type().is_gnu_longname() {
                 if gnu_longname.is_some() {
@@ -386,6 +400,10 @@ impl<R: Read + Unpin> Entries<R> {
                 }
 
                 ready_err!(Pin::new(new_fields).poll_read_all(cx, extension_body));
+                // A GNU long name or link ends in a NUL.
+                if extension_body.last() != Some(&0) {
+                    return Poll::Ready(Some(Err(other("a GNU long name or link without a NUL"))));
+                }
                 *gnu_longname = Some(mem::take(extension_body));
                 *fields = None;
                 continue;
@@ -399,6 +417,10 @@ impl<R: Read + Unpin> Entries<R> {
                     ))));
                 }
                 ready_err!(Pin::new(new_fields).poll_read_all(cx, extension_body));
+                // A GNU long name or link ends in a NUL.
+                if extension_body.last() != Some(&0) {
+                    return Poll::Ready(Some(Err(other("a GNU long name or link without a NUL"))));
+                }
                 *gnu_longlink = Some(mem::take(extension_body));
                 *fields = None;
                 continue;
@@ -426,6 +448,23 @@ impl<R: Read + Unpin> Entries<R> {
                 ))));
             }
 
+            // A pax global header may not set a size, path or linkpath. Its records stay
+            // readable through `Entry::pax_extensions`.
+            let is_global = is_recognized_header && entry_type.is_pax_global_extensions();
+            if is_global && new_fields.pax_extensions.is_none() {
+                ready_err!(Pin::new(&mut *new_fields).poll_read_all(cx, extension_body));
+                let records = mem::take(extension_body);
+                for record in crate::pax::pax_extensions(&records) {
+                    let record = record.map_err(|_e| other("pax extensions invalid"))?;
+                    if matches!(record.key_bytes(), b"size" | b"path" | b"linkpath") {
+                        return Poll::Ready(Some(Err(other(
+                            "a pax global header with a size, path or linkpath",
+                        ))));
+                    }
+                }
+                new_fields.pax_extensions = Some(records);
+            }
+
             // A Pending sparse header runs this again, so it keeps what an earlier pass moved.
             if gnu_longname.is_some() {
                 new_fields.long_pathname = gnu_longname.take();
@@ -440,15 +479,12 @@ impl<R: Read + Unpin> Entries<R> {
             // so it doesn't leak onto the next entry
             *current_pax_extensions = None;
 
-            // GNU tar, bsdtar and Python disagree on which of the two names wins.
-            if new_fields.long_pathname.is_some() && new_fields.pax_value(b"path").is_some() {
+            // A member takes its extensions from GNU or pax headers, never both.
+            let has_gnu_extension =
+                new_fields.long_pathname.is_some() || new_fields.long_linkname.is_some();
+            if has_gnu_extension && new_fields.pax_extensions.is_some() {
                 return Poll::Ready(Some(Err(other(
-                    "a GNU long name and a pax path describe the same member",
-                ))));
-            }
-            if new_fields.long_linkname.is_some() && new_fields.pax_value(b"linkpath").is_some() {
-                return Poll::Ready(Some(Err(other(
-                    "a GNU long link and a pax linkpath describe the same member",
+                    "GNU and pax extension headers describe the same member",
                 ))));
             }
 
@@ -459,6 +495,40 @@ impl<R: Read + Unpin> Entries<R> {
                     .is_some_and(<[u8]>::is_empty)
             {
                 return Poll::Ready(Some(Err(other("an empty pax path or linkpath"))));
+            }
+
+            // A pax path or linkpath may not contain a newline.
+            let has_newline = |key: &[u8]| {
+                new_fields
+                    .pax_value(key)
+                    .is_some_and(|value| value.contains(&b'\n'))
+            };
+            if has_newline(b"path") || has_newline(b"linkpath") {
+                return Poll::Ready(Some(Err(other("a newline in a pax path or linkpath"))));
+            }
+
+            // A name may not start with a drive letter such as `C:`.
+            let path = new_fields.path_bytes();
+            if matches!(&path[..], [letter, b':', ..] if letter.is_ascii_alphabetic()) {
+                return Poll::Ready(Some(Err(other("a name starting with a drive letter"))));
+            }
+
+            // A link's name may not end in a slash or be `.`.
+            let is_link = entry_type.is_symlink() || entry_type.is_hard_link();
+            let is_dir_name = path.ends_with(b"/")
+                || path
+                    .split(|b| *b == b'/')
+                    .all(|part| part.is_empty() || part == b".");
+            if is_link && is_dir_name {
+                return Poll::Ready(Some(Err(other("a link named like a directory"))));
+            }
+
+            // A link's target must be UTF-8.
+            let is_target_utf8 = new_fields
+                .link_name_bytes()
+                .is_none_or(|target| std::str::from_utf8(&target).is_ok());
+            if is_link && !is_target_utf8 {
+                return Poll::Ready(Some(Err(other("a link target that is not UTF-8"))));
             }
 
             let State {
@@ -592,6 +662,13 @@ fn poll_next_raw<R: Read + Unpin>(
         return Poll::Ready(Some(Err(other("archive header checksum mismatch"))));
     }
 
+    // A ustar or GNU magic must come with that format's version.
+    if header.has_unknown_version() {
+        return Poll::Ready(Some(Err(other(
+            "archive header has an unknown ustar or GNU version",
+        ))));
+    }
+
     let file_pos = *next;
 
     let mut header = current_header.take().unwrap();
@@ -633,9 +710,8 @@ fn poll_next_raw<R: Read + Unpin>(
                     let size_str = extension
                         .value()
                         .map_err(|_e| other("failed to parse pax size as string"))?;
-                    size = size_str
-                        .parse::<u64>()
-                        .map_err(|_e| other("failed to parse pax size"))?;
+                    size = parse_pax_number(size_str)
+                        .ok_or_else(|| other("failed to parse pax size"))?;
                 }
 
                 "uid" => {
@@ -643,9 +719,8 @@ fn poll_next_raw<R: Read + Unpin>(
                         .value()
                         .map_err(|_e| other("failed to parse pax uid as string"))?;
                     header.set_uid(
-                        uid_str
-                            .parse::<u64>()
-                            .map_err(|_e| other("failed to parse pax uid"))?,
+                        parse_pax_number(uid_str)
+                            .ok_or_else(|| other("failed to parse pax uid"))?,
                     );
                 }
 
@@ -654,9 +729,8 @@ fn poll_next_raw<R: Read + Unpin>(
                         .value()
                         .map_err(|_e| other("failed to parse pax gid as string"))?;
                     header.set_gid(
-                        gid_str
-                            .parse::<u64>()
-                            .map_err(|_e| other("failed to parse pax gid"))?,
+                        parse_pax_number(gid_str)
+                            .ok_or_else(|| other("failed to parse pax gid"))?,
                     );
                 }
 
@@ -714,6 +788,14 @@ fn poll_next_raw<R: Read + Unpin>(
     *next += size;
 
     Poll::Ready(Some(Ok(ret.into_entry())))
+}
+
+/// Returns the value of a pax number made of decimal digits without a leading zero.
+fn parse_pax_number(value: &str) -> Option<u64> {
+    let is_plain = !value.is_empty()
+        && value.bytes().all(|b| b.is_ascii_digit())
+        && (value == "0" || !value.starts_with('0'));
+    if is_plain { value.parse().ok() } else { None }
 }
 
 fn poll_parse_sparse_header<R: Read + Unpin>(

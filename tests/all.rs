@@ -1319,10 +1319,8 @@ fn pax_record(key: &str, value: &str) -> Vec<u8> {
 
 /// Regression test for GHSA-35rm-7j9c-2f7m (PAX extension-header desync).
 ///
-/// A buffered PAX `size` applies to the next file entry, not an intervening
-/// extension header. Mis-applying it to a GNU longname (`L`) reads the longname
-/// body with the wrong length and desyncs the parse, so an `x -> L -> file`
-/// stream can smuggle content past a POSIX-correct parser like GNU tar.
+/// An `x -> L -> file` stream is rejected, so its smuggled member never surfaces
+/// in the stream or on disk.
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn pax_size_not_applied_to_intermediary_longname() {
@@ -1369,59 +1367,15 @@ async fn pax_size_not_applied_to_intermediary_longname() {
     push_block(&mut tar, smuggled_body); // B6
     tar.extend(repeat(0u8).take(BLOCK * 2)); // EOF
 
-    // stream view: the surfaced entry must converge with GNU tar.
-    let ar = Archive::new(&tar[..]);
-    let mut entries = t!(ar.entries());
-
-    let mut first = t!(entries.next().await.unwrap());
-    let mut body = Vec::new();
-    t!(first.read_to_end(&mut body).await);
-
-    // a correct parser reads B5 (opaque) as this entry's data; a desynced one
-    // reads B6, the smuggled script.
-    assert!(
-        body.starts_with(b"hidden_payload.sh"),
-        "PAX size mis-applied to intermediary `L` header: entry data desynced \
-         (prefix {:?})",
-        String::from_utf8_lossy(&body[..body.len().min(16)]),
-    );
-    assert!(
-        !body.starts_with(b"#!/bin/sh"),
-        "smuggled executable payload was materialized as entry data",
-    );
-    assert_eq!(&*first.path_bytes(), b"GNU_SEES_THIS.txt");
-    assert!(
-        entries.next().await.is_none(),
-        "unexpected extra entry surfaced"
-    );
-
-    // on-disk view: GNU tar writes one file, GNU_SEES_THIS.txt, holding the
-    // opaque bytes B5+B6, and never writes hidden_payload.sh. async-tar must match.
-    let mut expected = Vec::new();
-    push_block(&mut expected, smuggled.as_bytes()); // B5
-    push_block(&mut expected, smuggled_body); // B6
+    let mut entries = t!(Archive::new(&tar[..]).entries());
+    while let Some(Ok(entry)) = entries.next().await {
+        assert_ne!(&*entry.path_bytes(), b"hidden_payload.sh");
+    }
+    assert!(is_rejected(&tar).await);
 
     let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
-    t!(Archive::new(&tar[..]).unpack(td.path()).await);
-
-    let extracted = td.path().join("GNU_SEES_THIS.txt");
-    assert!(
-        extracted.exists(),
-        "expected `GNU_SEES_THIS.txt` to be extracted"
-    );
-    let on_disk = t!(fs::read(&extracted).await);
-    assert_eq!(
-        on_disk,
-        expected,
-        "extracted file diverges from a POSIX-correct parser: for identical \
-         archive bytes async-tar wrote different contents than GNU tar (got \
-         prefix {:?})",
-        String::from_utf8_lossy(&on_disk[..on_disk.len().min(16)]),
-    );
-    assert!(
-        !td.path().join("hidden_payload.sh").exists(),
-        "smuggled file `hidden_payload.sh` was written to disk",
-    );
+    assert!(Archive::new(&tar[..]).unpack(td.path()).await.is_err());
+    assert!(!td.path().join("hidden_payload.sh").exists());
 }
 
 /// Regression test for the buffered-PAX state leak, adjacent to
@@ -1824,7 +1778,7 @@ fn push_member(tar: &mut Vec<u8>, entry_type: EntryType) {
 
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
-async fn mixed_pax_and_gnu_names_are_rejected() {
+async fn gnu_and_pax_extensions_on_one_member_are_rejected() {
     let mut pax_then_gnu = Vec::new();
     push_pax(&mut pax_then_gnu, &pax_record("path", "from-pax"));
     push_gnu_long(&mut pax_then_gnu, b'L', "from-gnu");
@@ -1840,16 +1794,25 @@ async fn mixed_pax_and_gnu_names_are_rejected() {
     push_gnu_long(&mut links, b'K', "from-gnu");
     push_member(&mut links, EntryType::Symlink);
 
-    for tar in [pax_then_gnu, gnu_then_pax, links] {
-        let mut entries = t!(Archive::new(&tar[..]).entries());
-        assert!(entries.next().await.unwrap().is_err());
-    }
-
     let mut gnu_and_mtime = Vec::new();
     push_gnu_long(&mut gnu_and_mtime, b'L', "from-gnu");
     push_pax(&mut gnu_and_mtime, &pax_record("mtime", "1"));
     push_member(&mut gnu_and_mtime, EntryType::Regular);
-    assert_eq!(read_entries(&gnu_and_mtime[..]).await[0].0, b"from-gnu");
+
+    let mut size_then_gnu = Vec::new();
+    push_pax(&mut size_then_gnu, &pax_record("size", "512"));
+    push_gnu_long(&mut size_then_gnu, b'L', "from-gnu");
+    push_member(&mut size_then_gnu, EntryType::Regular);
+
+    for tar in [
+        pax_then_gnu,
+        gnu_then_pax,
+        links,
+        gnu_and_mtime,
+        size_then_gnu,
+    ] {
+        assert!(is_rejected(&tar).await);
+    }
 }
 
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
@@ -1990,4 +1953,299 @@ async fn malformed_pax_records_are_rejected() {
         let mut entries = t!(Archive::new(&tar[..]).entries());
         assert!(entries.next().await.unwrap().is_err());
     }
+}
+
+async fn is_rejected(tar: &[u8]) -> bool {
+    let mut entries = t!(Archive::new(tar).entries());
+    while let Some(entry) = entries.next().await {
+        if entry.is_err() {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn gnu_tar_volume_label_reads() {
+    let mut label = Header::new_old();
+    t!(label.set_path("VOL1"));
+    label.set_entry_type(EntryType::new(b'V'));
+    label.as_mut_bytes()[124..136].fill(0);
+    label.set_cksum();
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, label.as_bytes());
+    push_member(&mut tar, EntryType::Regular);
+
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
+    t!(Archive::new(&tar[..]).unpack(td.path()).await);
+    assert!(td.path().join("from-header").exists());
+    assert!(!td.path().join("VOL1").exists());
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn base256_size_beyond_64_bits_is_rejected() {
+    let build = |size: [u8; 12]| {
+        let mut header = Header::new_gnu();
+        t!(header.set_path("a"));
+        header.as_mut_bytes()[124..136].copy_from_slice(&size);
+        header.set_cksum();
+        let mut tar = Vec::new();
+        push_block(&mut tar, header.as_bytes());
+        push_block(&mut tar, &[b'x'; BLOCK]);
+        tar.extend(repeat(0u8).take(BLOCK * 2));
+        tar
+    };
+
+    let too_large = build([0x80, 0, 0, 1, 0, 0, 0, 0, 0, 0, 2, 0]);
+    assert!(is_rejected(&too_large).await);
+
+    let fits = build([0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0]);
+    assert_eq!(read_entries(&fits[..]).await[0].1.len(), BLOCK);
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn signed_or_unterminated_size_is_rejected() {
+    let build = |size: &[u8; 12]| {
+        let mut header = Header::new_gnu();
+        t!(header.set_path("a"));
+        header.as_mut_bytes()[124..136].copy_from_slice(size);
+        header.set_cksum();
+        let mut tar = Vec::new();
+        push_block(&mut tar, header.as_bytes());
+        push_block(&mut tar, &[b'x'; 10]);
+        tar.extend(repeat(0u8).take(BLOCK * 2));
+        tar
+    };
+
+    assert!(is_rejected(&build(b"000000000012")).await);
+    assert!(is_rejected(&build(b"+0000000012\0")).await);
+    assert_eq!(
+        read_entries(&build(b"00000000012 ")[..]).await[0].1.len(),
+        10
+    );
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pax_numbers_must_be_plain_decimal() {
+    for size in ["+512", "0777"] {
+        let mut tar = Vec::new();
+        push_pax(&mut tar, &pax_record("size", size));
+        push_member(&mut tar, EntryType::Regular);
+        assert!(is_rejected(&tar).await, "{size}");
+    }
+
+    let mut tar = Vec::new();
+    push_pax(&mut tar, &pax_record("size", "0"));
+    push_member(&mut tar, EntryType::Regular);
+    assert_eq!(read_entries(&tar[..]).await.len(), 1);
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn unknown_magic_version_is_rejected() {
+    for (magic, version) in [(b"ustar\0", b"01"), (b"ustar ", b"00")] {
+        let mut header = Header::new_ustar();
+        t!(header.set_path("a"));
+        header.set_size(0);
+        header.as_mut_bytes()[257..263].copy_from_slice(magic);
+        header.as_mut_bytes()[263..265].copy_from_slice(version);
+        header.set_cksum();
+
+        let mut tar = Vec::new();
+        push_block(&mut tar, header.as_bytes());
+        tar.extend(repeat(0u8).take(BLOCK * 2));
+        assert!(is_rejected(&tar).await);
+    }
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn unknown_entry_types_are_rejected() {
+    for typeflag in [b'Z', b'N', b'D'] {
+        let mut header = Header::new_gnu();
+        t!(header.set_path("unknown"));
+        header.set_entry_type(EntryType::new(typeflag));
+        header.set_size(5);
+        header.set_cksum();
+
+        let mut tar = Vec::new();
+        push_block(&mut tar, header.as_bytes());
+        push_block(&mut tar, b"hello");
+        tar.extend(repeat(0u8).take(BLOCK * 2));
+        assert!(is_rejected(&tar).await, "{}", typeflag as char);
+    }
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pax_header_in_v7_archive_is_rejected() {
+    let mut v7 = Header::new_old();
+    t!(v7.set_path("a"));
+    v7.set_size(0);
+    v7.set_cksum();
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, v7.as_bytes());
+    push_pax(&mut tar, &pax_record("path", "renamed"));
+    push_member(&mut tar, EntryType::Regular);
+    assert!(is_rejected(&tar).await);
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, v7.as_bytes());
+    push_block(&mut tar, v7.as_bytes());
+    tar.extend(repeat(0u8).take(BLOCK * 2));
+    assert_eq!(read_entries(&tar[..]).await.len(), 2);
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn gnu_long_name_without_nul_is_rejected() {
+    for (typeflag, body) in [(b'L', &b"name"[..]), (b'K', b"target"), (b'L', b"")] {
+        let mut long = Header::new_gnu();
+        t!(long.set_path("././@LongLink"));
+        long.set_entry_type(EntryType::new(typeflag));
+        long.set_size(body.len() as u64);
+        long.set_cksum();
+
+        let mut tar = Vec::new();
+        push_block(&mut tar, long.as_bytes());
+        if !body.is_empty() {
+            push_block(&mut tar, &[body, b"-rest"].concat());
+        }
+        push_member(&mut tar, EntryType::Symlink);
+        assert!(is_rejected(&tar).await, "{}", typeflag as char);
+    }
+}
+
+fn push_pax_global(tar: &mut Vec<u8>, records: &[u8]) {
+    let mut g = Header::new_ustar();
+    t!(g.set_path("GlobalHead"));
+    g.set_entry_type(EntryType::new(b'g'));
+    g.set_size(records.len() as u64);
+    g.set_cksum();
+    push_block(tar, g.as_bytes());
+    push_block(tar, records);
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pax_global_size_path_or_linkpath_is_rejected() {
+    for (key, value) in [("size", "512"), ("path", "global-name"), ("linkpath", "x")] {
+        let mut tar = Vec::new();
+        push_pax_global(&mut tar, &pax_record(key, value));
+        push_member(&mut tar, EntryType::Regular);
+        assert!(is_rejected(&tar).await, "{key}");
+    }
+
+    let comment = pax_record("comment", "0123abcd");
+    let mut tar = Vec::new();
+    push_pax_global(&mut tar, &comment);
+    push_member(&mut tar, EntryType::Regular);
+    let mut entries = t!(Archive::new(&tar[..]).entries());
+    let mut global = t!(entries.next().await.unwrap());
+    let records = t!(global.pax_extensions().await).unwrap();
+    let keys: Vec<_> = records.map(|r| t!(r).key_bytes().to_vec()).collect();
+    assert_eq!(keys, [b"comment".to_vec()]);
+    assert_eq!(
+        &*t!(entries.next().await.unwrap()).path_bytes(),
+        b"from-header"
+    );
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn newline_in_pax_path_is_rejected() {
+    for (key, entry_type) in [
+        ("path", EntryType::Regular),
+        ("linkpath", EntryType::Symlink),
+    ] {
+        let mut tar = Vec::new();
+        push_pax(&mut tar, &pax_record(key, "a\nb"));
+        push_member(&mut tar, entry_type);
+        assert!(is_rejected(&tar).await, "{key}");
+    }
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn drive_letter_name_is_rejected() {
+    let mut header = Header::new_gnu();
+    header.as_mut_bytes()[..15].copy_from_slice(b"C:/drive-letter");
+    header.set_size(0);
+    header.set_cksum();
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, header.as_bytes());
+    tar.extend(repeat(0u8).take(BLOCK * 2));
+    assert!(is_rejected(&tar).await);
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn link_named_like_directory_is_rejected() {
+    for (name, entry_type) in [
+        (&b"link/"[..], EntryType::Symlink),
+        (b"b/", EntryType::Link),
+        (b".", EntryType::Symlink),
+    ] {
+        let mut header = Header::new_gnu();
+        header.as_mut_bytes()[..name.len()].copy_from_slice(name);
+        header.set_entry_type(entry_type);
+        t!(header.set_link_name("target"));
+        header.set_size(0);
+        header.set_cksum();
+
+        let mut tar = Vec::new();
+        push_block(&mut tar, header.as_bytes());
+        tar.extend(repeat(0u8).take(BLOCK * 2));
+        assert!(is_rejected(&tar).await, "{}", String::from_utf8_lossy(name));
+    }
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn link_target_not_utf8_is_rejected() {
+    let mut in_header = Vec::new();
+    let mut header = Header::new_gnu();
+    t!(header.set_path("link"));
+    header.set_entry_type(EntryType::Symlink);
+    header.as_mut_bytes()[157..161].copy_from_slice(b"caf\xe9");
+    header.set_size(0);
+    header.set_cksum();
+    push_block(&mut in_header, header.as_bytes());
+    in_header.extend(repeat(0u8).take(BLOCK * 2));
+
+    let mut in_pax = Vec::new();
+    push_pax(&mut in_pax, b"17 linkpath=caf\xe9\n");
+    push_member(&mut in_pax, EntryType::Symlink);
+
+    for tar in [in_header, in_pax] {
+        assert!(is_rejected(&tar).await);
+    }
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pax_global_header_name_makes_no_directories() {
+    let comment = pax_record("comment", "label");
+    let mut global = Header::new_ustar();
+    t!(global.set_path("tmp/GlobalHead.1.1"));
+    global.set_entry_type(EntryType::new(b'g'));
+    global.set_size(comment.len() as u64);
+    global.set_cksum();
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, global.as_bytes());
+    push_block(&mut tar, &comment);
+    push_member(&mut tar, EntryType::Regular);
+
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
+    t!(Archive::new(&tar[..]).unpack(td.path()).await);
+    assert!(td.path().join("from-header").exists());
+    assert!(!td.path().join("tmp").exists());
 }

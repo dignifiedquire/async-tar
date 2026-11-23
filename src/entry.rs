@@ -378,7 +378,7 @@ impl<R: Read + Unpin> EntryFields<R> {
         bytes2path(self.path_bytes())
     }
 
-    fn path_bytes(&self) -> Cow<'_, [u8]> {
+    pub(crate) fn path_bytes(&self) -> Cow<'_, [u8]> {
         if let Some(ref bytes) = self.long_pathname {
             if let Some(&0) = bytes.last() {
                 Cow::Borrowed(&bytes[..bytes.len() - 1])
@@ -415,7 +415,7 @@ impl<R: Read + Unpin> EntryFields<R> {
         }
     }
 
-    fn link_name_bytes(&self) -> Option<Cow<'_, [u8]>> {
+    pub(crate) fn link_name_bytes(&self) -> Option<Cow<'_, [u8]>> {
         match self.long_linkname {
             Some(ref bytes) => {
                 if let Some(&0) = bytes.last() {
@@ -444,6 +444,11 @@ impl<R: Read + Unpin> EntryFields<R> {
     }
 
     async fn unpack_in(&mut self, dst: &Path) -> io::Result<bool> {
+        // A metadata entry unpacks to no file and makes no directories above its name.
+        if self.header.entry_type().is_metadata() {
+            return Ok(true);
+        }
+
         // Notes regarding bsdtar 2.8.3 / libarchive 2.8.3:
         // * Leading '/'s are trimmed. For example, `///test` is treated as
         //   `test`.
@@ -630,13 +635,7 @@ impl<R: Read + Unpin> EntryFields<R> {
 
                 Ok(())
             }
-        } else if kind.is_pax_global_extensions()
-            || kind.is_pax_local_extensions()
-            || kind.is_gnu_longname()
-            || kind.is_gnu_longlink()
-            // Typeflag V is a GNU volume label, the name of the archive.
-            || kind.as_byte() == b'V'
-        {
+        } else if kind.is_metadata() {
             return Ok(Unpacked::Other);
         };
 
