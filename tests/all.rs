@@ -1853,3 +1853,35 @@ async fn mixed_pax_and_gnu_names_are_rejected() {
     push_member(&mut gnu_and_mtime, EntryType::Regular);
     assert_eq!(read_entries(&gnu_and_mtime[..]).await[0].0, b"from-gnu");
 }
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pax_global_header_before_member_is_rejected() {
+    let comment = pax_record("comment", "global");
+    let mut global = Header::new_ustar();
+    t!(global.set_path("GlobalHead"));
+    global.set_entry_type(EntryType::new(b'g'));
+    global.set_size(comment.len() as u64);
+    global.set_cksum();
+
+    let mut tar = Vec::new();
+    push_pax(&mut tar, &pax_record("path", "from-pax"));
+    push_block(&mut tar, global.as_bytes());
+    push_block(&mut tar, &comment);
+    push_member(&mut tar, EntryType::Regular);
+
+    let mut entries = t!(Archive::new(&tar[..]).entries());
+    assert!(entries.next().await.unwrap().is_err());
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, global.as_bytes());
+    push_block(&mut tar, &comment);
+    push_pax(&mut tar, &pax_record("path", "from-pax"));
+    push_member(&mut tar, EntryType::Regular);
+    let names: Vec<_> = read_entries(&tar[..])
+        .await
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect();
+    assert_eq!(names, [&b"GlobalHead"[..], b"from-pax"]);
+}

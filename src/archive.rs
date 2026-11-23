@@ -401,6 +401,14 @@ impl<R: Read + Unpin> Entries<R> {
                 continue;
             }
 
+            let is_extension_pending =
+                gnu_longname.is_some() || gnu_longlink.is_some() || pax_extensions.is_some();
+            if is_extension_pending && new_fields.header.entry_type().is_pax_global_extensions() {
+                return Poll::Ready(Some(Err(other(
+                    "a pax global header between an extension header and its member",
+                ))));
+            }
+
             // A Pending sparse header runs this again, so it keeps what an earlier pass moved.
             if gnu_longname.is_some() {
                 new_fields.long_pathname = gnu_longname.take();
