@@ -31,6 +31,9 @@ use crate::{
     symlink_metadata,
 };
 
+/// The largest GNU long name or link and pax header body read into memory, as in Go.
+const MAX_EXTENSION_SIZE: u64 = 1 << 20;
+
 /// A top-level representation of an archive file.
 ///
 /// This archive can have an entry added to it and it can be iterated over.
@@ -769,6 +772,10 @@ fn poll_next_raw<R: Read + Unpin>(
     // Sizes beyond i64::MAX are refused, since file offsets are signed 64-bit.
     if i64::try_from(size).is_err() {
         return Poll::Ready(Some(Err(other("archive header size is out of range"))));
+    }
+
+    if is_extension_header && size > MAX_EXTENSION_SIZE {
+        return Poll::Ready(Some(Err(other("an extension header larger than 1 MiB"))));
     }
 
     let data = EntryIo::Data(archive.clone().take(size));

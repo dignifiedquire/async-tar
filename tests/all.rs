@@ -2058,6 +2058,36 @@ async fn names_ending_in_a_slash_with_data_are_rejected() {
     }
 }
 
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn extension_headers_over_one_mib_are_rejected() {
+    let mib = 1 << 20;
+    let comment = |len: usize| {
+        let record = pax_record("comment", &"x".repeat(len));
+        let value_len = 2 * len - record.len();
+        pax_record("comment", &"x".repeat(value_len))
+    };
+    assert_eq!(comment(mib).len(), mib);
+
+    let mut at_limit = Vec::new();
+    push_pax(&mut at_limit, &comment(mib));
+    push_file(&mut at_limit, "a", b"");
+    at_limit.extend(repeat_n(0u8, BLOCK * 2));
+    assert_eq!(read_entries(&at_limit[..]).await.len(), 1);
+
+    let mut over_pax = Vec::new();
+    push_pax(&mut over_pax, &comment(mib + 1));
+    let mut over_gnu = Vec::new();
+    push_gnu_long(&mut over_gnu, b'L', &"a".repeat(mib));
+    for mut tar in [over_pax, over_gnu] {
+        push_file(&mut tar, "a", b"");
+        tar.extend(repeat_n(0u8, BLOCK * 2));
+        let mut entries = t!(Archive::new(&tar[..]).entries());
+        assert!(entries.next().await.unwrap().is_err());
+        assert!(entries.next().await.is_none());
+    }
+}
+
 async fn is_rejected(tar: &[u8]) -> bool {
     let mut entries = t!(Archive::new(tar).entries());
     while let Some(entry) = entries.next().await {
