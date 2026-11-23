@@ -7,7 +7,7 @@ use std::{
     fmt,
     fs::Metadata,
     iter,
-    iter::{repeat, repeat_n},
+    iter::repeat_n,
     mem,
     path::{Component, Path, PathBuf},
     str,
@@ -1414,11 +1414,12 @@ fn octal_from(slice: &[u8]) -> io::Result<u64> {
     }
 }
 
-fn octal_into<T: fmt::Octal>(dst: &mut [u8], val: T) {
-    let o = format!("{:o}", val);
-    let value = o.bytes().rev().chain(repeat(b'0'));
-    for (slot, value) in dst.iter_mut().rev().skip(1).zip(value) {
-        *slot = value;
+fn octal_into(dst: &mut [u8], val: impl Into<u64>) {
+    // The last byte is left as is, and the digits before it are zero-padded.
+    let mut val = val.into();
+    for slot in dst.iter_mut().rev().skip(1) {
+        *slot = b'0' + (val & 7) as u8;
+        val >>= 3;
     }
 }
 
