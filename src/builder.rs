@@ -36,7 +36,52 @@ pub struct Builder<W: Write + Unpin> {
     mode: HeaderMode,
     follow: bool,
     finished: bool,
-    obj: Option<W>,
+    obj: Option<Output<W>>,
+}
+
+/// The writer an archive goes to, and whether a write left a member incomplete.
+#[derive(Debug)]
+struct Output<W: ?Sized> {
+    is_poisoned: bool,
+    writer: W,
+}
+
+impl<W: Write + Unpin + ?Sized> Output<W> {
+    /// Starts writing a member, failing once an earlier one was left incomplete.
+    fn begin(&mut self) -> io::Result<MemberWrite<'_, W>> {
+        if self.is_poisoned {
+            return Err(other("an earlier write left the archive incomplete"));
+        }
+        Ok(MemberWrite { output: self })
+    }
+}
+
+/// A write of a single member to an output.
+///
+/// Dropping it before [`MemberWrite::end`] makes every later write to the output fail.
+#[derive(Debug)]
+struct MemberWrite<'a, W: ?Sized> {
+    output: &'a mut Output<W>,
+}
+
+impl<W: ?Sized> MemberWrite<'_, W> {
+    /// Returns the writer the member goes to.
+    fn writer(&mut self) -> &mut W {
+        &mut self.output.writer
+    }
+
+    /// Marks the member as complete, leaving the output usable.
+    fn end(self) {
+        // Forgetting the write skips its drop, so later writes still succeed. It holds
+        // only a reference, so nothing leaks.
+        std::mem::forget(self);
+    }
+}
+
+impl<W: ?Sized> Drop for MemberWrite<'_, W> {
+    fn drop(&mut self) {
+        self.output.is_poisoned = true;
+    }
 }
 
 impl<W: Write + Unpin> Builder<W> {
@@ -48,7 +93,10 @@ impl<W: Write + Unpin> Builder<W> {
             mode: HeaderMode::Complete,
             follow: true,
             finished: false,
-            obj: Some(obj),
+            obj: Some(Output {
+                is_poisoned: false,
+                writer: obj,
+            }),
         }
     }
 
@@ -67,7 +115,7 @@ impl<W: Write + Unpin> Builder<W> {
 
     /// Gets shared reference to the underlying object.
     pub fn get_ref(&self) -> &W {
-        self.obj.as_ref().unwrap()
+        &self.obj.as_ref().unwrap().writer
     }
 
     /// Gets mutable reference to the underlying object.
@@ -77,6 +125,10 @@ impl<W: Write + Unpin> Builder<W> {
     /// useful in the situations when one needs to be ensured that
     /// tar entry was flushed to the disk.
     pub fn get_mut(&mut self) -> &mut W {
+        &mut self.output().writer
+    }
+
+    fn output(&mut self) -> &mut Output<W> {
         self.obj.as_mut().unwrap()
     }
 
@@ -91,7 +143,7 @@ impl<W: Write + Unpin> Builder<W> {
         if !self.finished {
             self.finish().await?;
         }
-        Ok(self.obj.take().unwrap())
+        Ok(self.obj.take().unwrap().writer)
     }
 
     /// Adds a new entry to this archive.
@@ -139,7 +191,7 @@ impl<W: Write + Unpin> Builder<W> {
         header: &Header,
         mut data: R,
     ) -> io::Result<()> {
-        append(self.get_mut(), header, &mut data).await?;
+        write_member(self.output(), &[], header, &mut data).await?;
 
         Ok(())
     }
@@ -192,13 +244,12 @@ impl<W: Write + Unpin> Builder<W> {
         &mut self,
         header: &mut Header,
         path: P,
-        data: R,
+        mut data: R,
     ) -> io::Result<()> {
         let mut extensions = Vec::new();
         prepare_header_path(&mut extensions, header, path.as_ref()).await?;
         header.set_cksum();
-        self.get_mut().write_all(&extensions).await?;
-        self.append(header, data).await?;
+        write_member(self.output(), &extensions, header, &mut data).await?;
 
         Ok(())
     }
@@ -234,7 +285,7 @@ impl<W: Write + Unpin> Builder<W> {
     pub async fn append_path<P: AsRef<Path>>(&mut self, path: P) -> io::Result<()> {
         let mode = self.mode;
         let follow = self.follow;
-        append_path_with_name(self.get_mut(), path.as_ref(), None, mode, follow).await?;
+        append_path_with_name(self.output(), path.as_ref(), None, mode, follow).await?;
         Ok(())
     }
 
@@ -275,7 +326,7 @@ impl<W: Write + Unpin> Builder<W> {
         let mode = self.mode;
         let follow = self.follow;
         append_path_with_name(
-            self.get_mut(),
+            self.output(),
             path.as_ref(),
             Some(name.as_ref()),
             mode,
@@ -321,7 +372,7 @@ impl<W: Write + Unpin> Builder<W> {
         file: &mut fs::File,
     ) -> io::Result<()> {
         let mode = self.mode;
-        append_file(self.get_mut(), path.as_ref(), file, mode).await?;
+        append_file(self.output(), path.as_ref(), file, mode).await?;
         Ok(())
     }
 
@@ -360,7 +411,7 @@ impl<W: Write + Unpin> Builder<W> {
         Q: AsRef<Path>,
     {
         let mode = self.mode;
-        append_dir(self.get_mut(), path.as_ref(), src_path.as_ref(), mode).await?;
+        append_dir(self.output(), path.as_ref(), src_path.as_ref(), mode).await?;
         Ok(())
     }
 
@@ -398,7 +449,7 @@ impl<W: Write + Unpin> Builder<W> {
         let mode = self.mode;
         let follow = self.follow;
         append_dir_all(
-            self.get_mut(),
+            self.output(),
             path.as_ref(),
             src_path.as_ref(),
             mode,
@@ -424,10 +475,33 @@ impl<W: Write + Unpin> Builder<W> {
         if self.finished {
             return Ok(());
         }
+        let mut member = self.output().begin()?;
+        member.writer().write_all(&[0; 1024]).await?;
+        member.end();
         self.finished = true;
-        self.get_mut().write_all(&[0; 1024]).await?;
         Ok(())
     }
+}
+
+/// Writes a member's extension headers, header and data to `dst`.
+///
+/// A failure once writing starts, or a dropped future, makes every later write to
+/// `dst` fail.
+async fn write_member<W, R>(
+    dst: &mut Output<W>,
+    extensions: &[u8],
+    header: &Header,
+    data: &mut R,
+) -> io::Result<()>
+where
+    W: Write + Unpin + ?Sized,
+    R: Read + Unpin + ?Sized,
+{
+    let mut member = dst.begin()?;
+    member.writer().write_all(extensions).await?;
+    append(member.writer(), header, data).await?;
+    member.end();
+    Ok(())
 }
 
 async fn append<W, R>(dst: &mut W, header: &Header, data: &mut R) -> io::Result<()>
@@ -449,7 +523,7 @@ where
 }
 
 async fn append_path_with_name<W: Write + Unpin + ?Sized>(
-    dst: &mut W,
+    dst: &mut Output<W>,
     path: &Path,
     name: Option<&Path>,
     mode: HeaderMode,
@@ -503,7 +577,7 @@ async fn append_path_with_name<W: Write + Unpin + ?Sized>(
 }
 
 async fn append_file<W: Write + Unpin + ?Sized>(
-    dst: &mut W,
+    dst: &mut Output<W>,
     path: &Path,
     file: &mut fs::File,
     mode: HeaderMode,
@@ -514,7 +588,7 @@ async fn append_file<W: Write + Unpin + ?Sized>(
 }
 
 async fn append_dir<W: Write + Unpin + ?Sized>(
-    dst: &mut W,
+    dst: &mut Output<W>,
     path: &Path,
     src_path: &Path,
     mode: HeaderMode,
@@ -588,7 +662,7 @@ async fn prepare_header_link<W: Write + Unpin + ?Sized>(
 }
 
 async fn append_fs<W: Write + Unpin + ?Sized>(
-    dst: &mut W,
+    dst: &mut Output<W>,
     path: &Path,
     meta: &Metadata,
     read: &mut (dyn Read + Unpin + Sync + Send),
@@ -606,14 +680,13 @@ async fn append_fs<W: Write + Unpin + ?Sized>(
         prepare_header_link(&mut extensions, &mut header, link_name).await?;
     }
     header.set_cksum();
-    dst.write_all(&extensions).await?;
-    append(dst, &header, read).await?;
+    write_member(dst, &extensions, &header, read).await?;
 
     Ok(())
 }
 
 async fn append_dir_all<W: Write + Unpin + ?Sized>(
-    dst: &mut W,
+    dst: &mut Output<W>,
     path: &Path,
     src_path: &Path,
     mode: HeaderMode,
@@ -667,7 +740,8 @@ impl<W: Write + Unpin> Drop for Builder<W> {
 #[cfg(feature = "runtime-tokio")]
 impl<W: Write + Unpin> Drop for Builder<W> {
     fn drop(&mut self) {
-        if !self.finished && !std::thread::panicking() && self.obj.is_some() {
+        let is_poisoned = self.obj.as_ref().is_some_and(|output| output.is_poisoned);
+        if !self.finished && !is_poisoned && !std::thread::panicking() && self.obj.is_some() {
             panic!("Builder dropped without finalizing; call finish() or into_inner()");
         }
     }
@@ -762,7 +836,10 @@ mod tests {
     async fn rejected_link_name_leaves_no_long_name() {
         let meta = std::fs::metadata("Cargo.toml").unwrap();
         let path = Path::new("a").join("b".repeat(200));
-        let mut dst = Vec::new();
+        let mut dst = Output {
+            is_poisoned: false,
+            writer: Vec::new(),
+        };
         let appended = append_fs(
             &mut dst,
             &path,
@@ -773,7 +850,127 @@ mod tests {
         )
         .await;
         assert!(appended.is_err());
-        assert!(dst.is_empty());
+        assert!(dst.writer.is_empty());
+        assert!(!dst.is_poisoned);
+    }
+
+    struct LimitedWriter {
+        written: Vec<u8>,
+        fail_past: Option<usize>,
+        is_stuck: bool,
+    }
+
+    #[cfg(feature = "runtime-smol")]
+    impl Write for LimitedWriter {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            let is_past = self
+                .fail_past
+                .is_some_and(|limit| self.written.len() + buf.len() > limit);
+            if is_past && self.is_stuck {
+                return Poll::Pending;
+            }
+            if is_past {
+                self.fail_past = None;
+                return Poll::Ready(Err(io::Error::other("failed once")));
+            }
+            self.written.extend_from_slice(buf);
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[cfg(feature = "runtime-tokio")]
+    impl Write for LimitedWriter {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            let is_past = self
+                .fail_past
+                .is_some_and(|limit| self.written.len() + buf.len() > limit);
+            if is_past && self.is_stuck {
+                return Poll::Pending;
+            }
+            if is_past {
+                self.fail_past = None;
+                return Poll::Ready(Err(io::Error::other("failed once")));
+            }
+            self.written.extend_from_slice(buf);
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    fn empty_member(path: &str) -> Header {
+        let mut header = Header::new_gnu();
+        header.set_path(path).unwrap();
+        header.set_size(0);
+        header.set_cksum();
+        header
+    }
+
+    #[cfg_attr(
+        feature = "runtime-smol",
+        macro_rules_attribute::apply(smol_macros::test!)
+    )]
+    #[cfg_attr(feature = "runtime-tokio", tokio::test)]
+    async fn failed_write_poisons_the_builder() {
+        let mut ar = Builder::new(LimitedWriter {
+            written: Vec::new(),
+            fail_past: Some(600),
+            is_stuck: false,
+        });
+        let mut header = Header::new_gnu();
+        header.set_path("a").unwrap();
+        header.set_size(1024);
+        header.set_cksum();
+        assert!(ar.append(&header, &[1; 1024][..]).await.is_err());
+        let written = ar.get_ref().written.len();
+
+        assert!(ar.append(&empty_member("b"), &[][..]).await.is_err());
+        assert!(ar.finish().await.is_err());
+        assert_eq!(ar.get_ref().written.len(), written);
+    }
+
+    #[cfg_attr(
+        feature = "runtime-smol",
+        macro_rules_attribute::apply(smol_macros::test!)
+    )]
+    #[cfg_attr(feature = "runtime-tokio", tokio::test)]
+    async fn dropped_append_poisons_the_builder() {
+        let mut ar = Builder::new(LimitedWriter {
+            written: Vec::new(),
+            fail_past: Some(0),
+            is_stuck: true,
+        });
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        let header = empty_member("a");
+        {
+            let mut append = std::pin::pin!(ar.append(&header, &[][..]));
+            assert!(append.as_mut().poll(&mut cx).is_pending());
+        }
+
+        let mut append = std::pin::pin!(ar.append(&header, &[][..]));
+        assert!(matches!(append.as_mut().poll(&mut cx), Poll::Ready(Err(_))));
     }
 
     fn assert_send<T: Send>(_: &T) {}
