@@ -1,7 +1,6 @@
 use std::iter::repeat;
 
 use async_tar::{Archive, ArchiveBuilder, Builder, EntryType, Header};
-use filetime::FileTime;
 #[cfg(feature = "runtime-smol")]
 use smol::{
     fs::{self, File},
@@ -784,12 +783,9 @@ async fn file_times() {
     t!(ar.unpack(td.path()).await);
 
     let meta = fs::metadata(td.path().join("a")).await.unwrap();
-    let mtime = FileTime::from_last_modification_time(&meta);
-    let atime = FileTime::from_last_access_time(&meta);
-    assert_eq!(mtime.unix_seconds(), 1_000_000_000);
-    assert_eq!(mtime.nanoseconds(), 0);
-    assert_eq!(atime.unix_seconds(), 1_000_000_000);
-    assert_eq!(atime.nanoseconds(), 0);
+    let expected = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+    assert_eq!(t!(meta.modified()), expected);
+    assert_eq!(t!(meta.accessed()), expected);
 }
 
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
