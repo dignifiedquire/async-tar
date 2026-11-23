@@ -2099,3 +2099,21 @@ async fn unknown_magic_version_is_rejected() {
         assert!(is_rejected(&tar).await);
     }
 }
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn unknown_entry_types_are_rejected() {
+    for typeflag in [b'Z', b'N', b'D'] {
+        let mut header = Header::new_gnu();
+        t!(header.set_path("unknown"));
+        header.set_entry_type(EntryType::new(typeflag));
+        header.set_size(5);
+        header.set_cksum();
+
+        let mut tar = Vec::new();
+        push_block(&mut tar, header.as_bytes());
+        push_block(&mut tar, b"hello");
+        tar.extend(repeat(0u8).take(BLOCK * 2));
+        assert!(is_rejected(&tar).await, "{}", typeflag as char);
+    }
+}

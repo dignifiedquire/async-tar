@@ -376,6 +376,11 @@ impl<R: Read + Unpin> Entries<R> {
                     "Solaris extended headers are not supported",
                 ))));
             }
+            // POSIX extracts an unknown type as a file, but readers disagree on whether
+            // it has data.
+            if matches!(entry_type, EntryType::Other(byte) if byte != b'V') {
+                return Poll::Ready(Some(Err(other("an entry type async-tar does not read"))));
+            }
 
             if is_recognized_header && new_fields.header.entry_type().is_gnu_longname() {
                 if gnu_longname.is_some() {
