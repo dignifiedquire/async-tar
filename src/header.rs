@@ -1432,6 +1432,11 @@ fn size_from(field: &[u8]) -> io::Result<u64> {
     if field.iter().all(|b| *b == 0) {
         return Ok(0);
     }
+    // POSIX ends an octal size with a NUL or space and gives it no sign.
+    let is_octal = field[0] & 0x80 == 0;
+    if is_octal && (field.contains(&b'+') || !matches!(field.last(), Some(0 | b' '))) {
+        return Err(other("size field has a sign or no terminator"));
+    }
     num_field_wrapper_from(field)
 }
 

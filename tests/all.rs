@@ -2042,3 +2042,26 @@ async fn base256_size_beyond_64_bits_is_rejected() {
     let fits = build([0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0]);
     assert_eq!(read_entries(&fits[..]).await[0].1.len(), BLOCK);
 }
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn signed_or_unterminated_size_is_rejected() {
+    let build = |size: &[u8; 12]| {
+        let mut header = Header::new_gnu();
+        t!(header.set_path("a"));
+        header.as_mut_bytes()[124..136].copy_from_slice(size);
+        header.set_cksum();
+        let mut tar = Vec::new();
+        push_block(&mut tar, header.as_bytes());
+        push_block(&mut tar, &[b'x'; 10]);
+        tar.extend(repeat(0u8).take(BLOCK * 2));
+        tar
+    };
+
+    assert!(is_rejected(&build(b"000000000012")).await);
+    assert!(is_rejected(&build(b"+0000000012\0")).await);
+    assert_eq!(
+        read_entries(&build(b"00000000012 ")[..]).await[0].1.len(),
+        10
+    );
+}
