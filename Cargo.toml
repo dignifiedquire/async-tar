@@ -2,7 +2,6 @@
 name = "async-tar"
 version = "0.6.1"
 authors = ["dignifiedquire <me@dignifiequire.com>", "Alex Crichton <alex@alexcrichton.com>"]
-homepage = "https://github.com/dignifiedquire/async-tar"
 repository = "https://github.com/dignifiedquire/async-tar"
 documentation = "https://docs.rs/async-tar"
 license = "MIT/Apache-2.0"
