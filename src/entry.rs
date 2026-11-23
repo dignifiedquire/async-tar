@@ -5,17 +5,15 @@ use std::{
     task::{Context, Poll},
 };
 
-#[cfg(feature = "runtime-async-std")]
-use async_std::{
-    fs,
-    fs::{OpenOptions, Permissions},
-    io::{self, Error, ErrorKind, SeekFrom, prelude::*},
-    path::{Component, Path, PathBuf},
-};
+#[cfg(feature = "runtime-smol")]
+use async_fs::{self as fs, OpenOptions};
 use futures_core::ready;
-#[cfg(all(unix, feature = "runtime-tokio"))]
+#[cfg(feature = "runtime-smol")]
+use futures_lite::io::{
+    self, AsyncRead as Read, AsyncReadExt, AsyncSeekExt, Error, ErrorKind, SeekFrom,
+};
+#[cfg(unix)]
 use std::fs::Permissions;
-#[cfg(feature = "runtime-tokio")]
 use std::path::{Component, Path, PathBuf};
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
@@ -231,12 +229,12 @@ impl<R: Read + Unpin> Entry<R> {
     ///
     /// # Examples
     ///
-    #[cfg_attr(feature = "runtime-async-std", doc = "```no_run")]
+    #[cfg_attr(feature = "runtime-smol", doc = "```no_run")]
     #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
-    /// use async_std::fs::File;
-    /// use async_std::prelude::*;
+    /// use smol::fs::File;
+    /// use smol::stream::StreamExt;
     /// use async_tar::Archive;
     ///
     /// let mut ar = Archive::new(File::open("foo.tar").await?);
@@ -267,13 +265,13 @@ impl<R: Read + Unpin> Entry<R> {
     ///
     /// # Examples
     ///
-    #[cfg_attr(feature = "runtime-async-std", doc = "```no_run")]
+    #[cfg_attr(feature = "runtime-smol", doc = "```no_run")]
     #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
-    /// use async_std::fs::File;
+    /// use smol::fs::File;
     /// use async_tar::Archive;
-    /// use async_std::prelude::*;
+    /// use smol::stream::StreamExt;
     ///
     /// let mut ar = Archive::new(File::open("foo.tar").await?);
     /// let mut entries = ar.entries()?;
@@ -319,7 +317,7 @@ impl<R: Read + Unpin> Entry<R> {
     }
 }
 
-#[cfg(feature = "runtime-async-std")]
+#[cfg(feature = "runtime-smol")]
 impl<R: Read + Unpin> Read for Entry<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -613,9 +611,9 @@ impl<R: Read + Unpin> EntryFields<R> {
 
             #[cfg(windows)]
             async fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
-                #[cfg(feature = "runtime-async-std")]
+                #[cfg(feature = "runtime-smol")]
                 {
-                    async_std::os::windows::fs::symlink_file(src, dst).await
+                    async_fs::windows::symlink_file(src, dst).await
                 }
                 #[cfg(feature = "runtime-tokio")]
                 {
@@ -625,8 +623,8 @@ impl<R: Read + Unpin> EntryFields<R> {
 
             #[cfg(any(unix, target_os = "redox"))]
             async fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
-                #[cfg(feature = "runtime-async-std")]
-                async_std::os::unix::fs::symlink(src, dst).await?;
+                #[cfg(feature = "runtime-smol")]
+                async_fs::unix::symlink(src, dst).await?;
                 #[cfg(feature = "runtime-tokio")]
                 tokio::fs::symlink(src, dst).await?;
 
@@ -912,7 +910,7 @@ impl<R: Read + Unpin> EntryFields<R> {
     }
 }
 
-#[cfg(feature = "runtime-async-std")]
+#[cfg(feature = "runtime-smol")]
 impl<R: Read + Unpin> Read for EntryFields<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -1001,7 +999,7 @@ impl<R: Read + Unpin> Read for EntryFields<R> {
     }
 }
 
-#[cfg(feature = "runtime-async-std")]
+#[cfg(feature = "runtime-smol")]
 impl<R: Read + Unpin> Read for EntryIo<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -1042,7 +1040,7 @@ impl Drop for Guard<'_> {
     }
 }
 
-#[cfg(feature = "runtime-async-std")]
+#[cfg(feature = "runtime-smol")]
 fn poll_read_all_internal<R: Read + ?Sized>(
     mut rd: Pin<&mut R>,
     cx: &mut Context<'_>,

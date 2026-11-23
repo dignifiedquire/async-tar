@@ -1,4 +1,3 @@
-#[cfg(feature = "runtime-tokio")]
 use std::path::Path;
 use std::{
     cmp, mem,
@@ -7,14 +6,14 @@ use std::{
     task::{Context, Poll},
 };
 
-#[cfg(feature = "runtime-async-std")]
-use async_std::{
-    fs, io,
-    io::prelude::*,
-    path::Path,
+#[cfg(feature = "runtime-smol")]
+use async_fs as fs;
+use futures_core::ready;
+#[cfg(feature = "runtime-smol")]
+use futures_lite::{
+    io::{self, AsyncRead as Read, AsyncReadExt},
     stream::{Stream, StreamExt},
 };
-use futures_core::ready;
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
     fs,
@@ -224,11 +223,11 @@ impl<R: Read + Unpin> Archive<R> {
     ///
     /// # Examples
     ///
-    #[cfg_attr(feature = "runtime-async-std", doc = "```no_run")]
+    #[cfg_attr(feature = "runtime-smol", doc = "```no_run")]
     #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
-    /// use async_std::fs::File;
+    /// use smol::fs::File;
     /// use async_tar::Archive;
     ///
     /// let mut ar = Archive::new(File::open("foo.tar").await?);
@@ -842,7 +841,7 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
     Poll::Ready(Ok(()))
 }
 
-#[cfg(feature = "runtime-async-std")]
+#[cfg(feature = "runtime-smol")]
 impl<R: Read + Unpin> Read for Archive<R> {
     fn poll_read(
         self: Pin<&mut Self>,
@@ -891,7 +890,7 @@ impl<R: Read + Unpin> Read for Archive<R> {
 ///
 /// If the reader reaches its end before filling the buffer at all, returns `false`.
 /// Otherwise returns `true`.
-#[cfg(feature = "runtime-async-std")]
+#[cfg(feature = "runtime-smol")]
 fn poll_try_read_all<R: Read + Unpin>(
     mut source: R,
     cx: &mut Context<'_>,
@@ -948,7 +947,7 @@ fn poll_try_read_all<R: Read + Unpin>(
 }
 
 /// Skip n bytes on the given source.
-#[cfg(feature = "runtime-async-std")]
+#[cfg(feature = "runtime-smol")]
 fn poll_skip<R: Read + Unpin>(
     mut source: R,
     cx: &mut Context<'_>,

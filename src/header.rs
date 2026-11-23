@@ -5,15 +5,10 @@ use std::os::windows::prelude::*;
 
 use std::{borrow::Cow, fmt, iter, iter::repeat, iter::repeat_n, mem, str};
 
-#[cfg(all(windows, feature = "runtime-async-std"))]
-use async_std::fs;
-#[cfg(feature = "runtime-async-std")]
-use async_std::{
-    fs::Metadata,
-    io,
-    path::{Component, Path, PathBuf},
-};
-#[cfg(feature = "runtime-tokio")]
+#[cfg(all(windows, feature = "runtime-smol"))]
+use async_fs as fs;
+#[cfg(feature = "runtime-smol")]
+use futures_lite::io;
 use std::{
     fs::Metadata,
     path::{Component, Path, PathBuf},

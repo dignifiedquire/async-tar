@@ -1,7 +1,7 @@
 use std::str;
 
-#[cfg(feature = "runtime-async-std")]
-use async_std::io;
+#[cfg(feature = "runtime-smol")]
+use futures_lite::io;
 #[cfg(feature = "runtime-tokio")]
 use tokio::io;
 
