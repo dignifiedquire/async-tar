@@ -2171,3 +2171,17 @@ async fn newline_in_pax_path_is_rejected() {
         assert!(is_rejected(&tar).await, "{key}");
     }
 }
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn drive_letter_name_is_rejected() {
+    let mut header = Header::new_gnu();
+    header.as_mut_bytes()[..15].copy_from_slice(b"C:/drive-letter");
+    header.set_size(0);
+    header.set_cksum();
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, header.as_bytes());
+    tar.extend(repeat(0u8).take(BLOCK * 2));
+    assert!(is_rejected(&tar).await);
+}

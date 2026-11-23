@@ -378,7 +378,7 @@ impl<R: Read + Unpin> EntryFields<R> {
         bytes2path(self.path_bytes())
     }
 
-    fn path_bytes(&self) -> Cow<'_, [u8]> {
+    pub(crate) fn path_bytes(&self) -> Cow<'_, [u8]> {
         if let Some(ref bytes) = self.long_pathname {
             if let Some(&0) = bytes.last() {
                 Cow::Borrowed(&bytes[..bytes.len() - 1])

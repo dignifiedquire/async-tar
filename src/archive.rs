@@ -509,6 +509,13 @@ impl<R: Read + Unpin> Entries<R> {
                 return Poll::Ready(Some(Err(other("a newline in a pax path or linkpath"))));
             }
 
+            // Windows reads a leading drive letter as a path prefix and Unix as a
+            // directory, so one archive unpacks differently on each.
+            let path = new_fields.path_bytes();
+            if matches!(&path[..], [letter, b':', ..] if letter.is_ascii_alphabetic()) {
+                return Poll::Ready(Some(Err(other("a name starting with a drive letter"))));
+            }
+
             let State {
                 next,
                 current_header_pos,
