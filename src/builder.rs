@@ -1,17 +1,13 @@
 use std::borrow::Cow;
 
-#[cfg(feature = "runtime-async-std")]
-use async_std::fs::Metadata;
-#[cfg(feature = "runtime-async-std")]
-use async_std::{
-    fs,
-    io::{self, Read, Write},
-    path::Path,
-    prelude::*,
+#[cfg(feature = "runtime-smol")]
+use async_fs as fs;
+#[cfg(feature = "runtime-smol")]
+use futures_lite::{
+    io::{self, AsyncRead as Read, AsyncReadExt, AsyncWrite as Write, AsyncWriteExt},
+    stream::StreamExt,
 };
-#[cfg(feature = "runtime-tokio")]
 use std::fs::Metadata;
-#[cfg(feature = "runtime-tokio")]
 use std::path::Path;
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
@@ -119,9 +115,9 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     ///
     /// # Examples
     ///
-    #[cfg_attr(feature = "runtime-async-std", doc = "```")]
+    #[cfg_attr(feature = "runtime-smol", doc = "```")]
     #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
     /// use async_tar::{Builder, Header};
     ///
@@ -176,7 +172,7 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// # Examples
     ///
     /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
     /// use async_tar::{Builder, Header};
     ///
@@ -223,7 +219,7 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// # Examples
     ///
     /// ```no_run
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
     /// use async_tar::Builder;
     ///
@@ -257,7 +253,7 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// # Examples
     ///
     /// ```no_run
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
     /// use async_tar::Builder;
     ///
@@ -302,11 +298,11 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     ///
     /// # Examples
     ///
-    #[cfg_attr(feature = "runtime-async-std", doc = "```no_run")]
+    #[cfg_attr(feature = "runtime-smol", doc = "```no_run")]
     #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
-    /// use async_std::fs::File;
+    /// use smol::fs::File;
     /// use async_tar::Builder;
     ///
     /// let mut ar = Builder::new(Vec::new());
@@ -343,11 +339,11 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     ///
     /// # Examples
     ///
-    #[cfg_attr(feature = "runtime-async-std", doc = "```")]
+    #[cfg_attr(feature = "runtime-smol", doc = "```")]
     #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
-    /// use async_std::fs;
+    /// use smol::fs;
     /// use async_tar::Builder;
     ///
     /// let mut ar = Builder::new(Vec::new());
@@ -380,11 +376,11 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     ///
     /// # Examples
     ///
-    #[cfg_attr(feature = "runtime-async-std", doc = "```")]
+    #[cfg_attr(feature = "runtime-smol", doc = "```")]
     #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
-    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { async_std::task::block_on(async {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
     /// #
-    /// use async_std::fs;
+    /// use smol::fs;
     /// use async_tar::Builder;
     ///
     /// let mut ar = Builder::new(Vec::new());
@@ -618,11 +614,6 @@ async fn append_dir_all(
     while let Some((src, is_dir, is_symlink)) = stack.pop() {
         let dest = path.join(src.strip_prefix(src_path).unwrap());
 
-        #[cfg(feature = "runtime-async-std")]
-        async fn check_is_dir(path: &Path) -> bool {
-            path.is_dir().await
-        }
-        #[cfg(feature = "runtime-tokio")]
         async fn check_is_dir(path: &Path) -> bool {
             fs::metadata(path)
                 .await
@@ -632,7 +623,7 @@ async fn append_dir_all(
 
         // In case of a symlink pointing to a directory, is_dir is false, but src.is_dir() will return true
         if is_dir || (is_symlink && follow && check_is_dir(&src).await) {
-            #[cfg(feature = "runtime-async-std")]
+            #[cfg(feature = "runtime-smol")]
             let mut entries = fs::read_dir(&src).await?;
             #[cfg(feature = "runtime-tokio")]
             let mut entries = tokio_stream::wrappers::ReadDirStream::new(fs::read_dir(&src).await?);
@@ -655,10 +646,10 @@ async fn append_dir_all(
     Ok(())
 }
 
-#[cfg(feature = "runtime-async-std")]
+#[cfg(feature = "runtime-smol")]
 impl<W: Write + Unpin + Send + Sync> Drop for Builder<W> {
     fn drop(&mut self) {
-        async_std::task::block_on(async move {
+        futures_lite::future::block_on(async move {
             let _ = self.finish().await;
         });
     }

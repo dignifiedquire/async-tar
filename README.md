@@ -42,21 +42,22 @@
 
 ## Features
 
-- `runtime-async-std`: enabled by default, makes this crate compatible with `async-std`
+- `runtime-smol`: enabled by default, makes this crate compatible with `smol`
 - `runtime-tokio`: makes this crate compatible with `tokio`
 
 > **Note**: These features are mutually exclusive. Enable only one runtime feature.
 
+`runtime-smol` replaced `runtime-async-std`, because async-std is discontinued.
+
 ## Reading an archive
 
 ```rust,no_run
-use async_std::io::stdin;
-use async_std::prelude::*;
 use async_tar::Archive;
+use smol::{Unblock, stream::StreamExt};
 
 fn main() {
-    async_std::task::block_on(async {
-        let mut ar = Archive::new(stdin());
+    smol::block_on(async {
+        let mut ar = Archive::new(Unblock::new(std::io::stdin()));
         let mut entries = ar.entries().unwrap();
         while let Some(file) = entries.next().await {
             let f = file.unwrap();
@@ -69,11 +70,11 @@ fn main() {
 ## Writing an archive
 
 ```rust,no_run
-use async_std::fs::File;
 use async_tar::Builder;
+use smol::fs::File;
 
 fn main() {
-    async_std::task::block_on(async {
+    smol::block_on(async {
         let file = File::create("foo.tar").await.unwrap();
         let mut a = Builder::new(file);
 

@@ -1,7 +1,7 @@
 use std::{error, fmt};
 
-#[cfg(feature = "runtime-async-std")]
-use async_std::io::{self, Error};
+#[cfg(feature = "runtime-smol")]
+use futures_lite::io::{self, Error};
 #[cfg(feature = "runtime-tokio")]
 use tokio::io::{self, Error};
 

@@ -1,7 +1,8 @@
-#[cfg(feature = "runtime-async-std")]
-use async_std::{
+#[cfg(feature = "runtime-smol")]
+use smol::{
     fs::{self, File, create_dir},
-    prelude::*,
+    io::AsyncReadExt,
+    stream::StreamExt,
 };
 
 #[cfg(feature = "runtime-tokio")]
@@ -23,7 +24,7 @@ macro_rules! t {
     };
 }
 
-#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn absolute_symlink() {
     let mut ar = async_tar::Builder::new(Vec::new());
@@ -50,7 +51,7 @@ async fn absolute_symlink() {
     assert_eq!(&*entry.link_name_bytes().unwrap(), b"/bar");
 }
 
-#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn absolute_hardlink() {
     let td = t!(Builder::new().prefix("tar").tempdir());
@@ -80,7 +81,7 @@ async fn absolute_hardlink() {
     t!(td.path().join("bar").metadata());
 }
 
-#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn relative_hardlink() {
     let mut ar = async_tar::Builder::new(Vec::new());
@@ -109,7 +110,7 @@ async fn relative_hardlink() {
     t!(td.path().join("bar").metadata());
 }
 
-#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn absolute_link_deref_error() {
     let mut ar = async_tar::Builder::new(Vec::new());
@@ -138,7 +139,7 @@ async fn absolute_link_deref_error() {
     assert!(File::open(td.path().join("foo").join("bar")).await.is_err());
 }
 
-#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn relative_link_deref_error() {
     let mut ar = async_tar::Builder::new(Vec::new());
@@ -167,7 +168,7 @@ async fn relative_link_deref_error() {
     assert!(File::open(td.path().join("foo").join("bar")).await.is_err());
 }
 
-#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 #[cfg(unix)]
 async fn directory_maintains_permissions() {
@@ -194,7 +195,7 @@ async fn directory_maintains_permissions() {
     assert_eq!(md.permissions().mode(), 0o40777);
 }
 
-#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 #[cfg(not(windows))] // dangling symlinks have weird permissions
 async fn modify_link_just_created() {
@@ -234,7 +235,7 @@ async fn modify_link_just_created() {
     t!(File::open(td.path().join("foo/bar")).await);
 }
 
-#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 #[cfg(not(windows))] // dangling symlinks have weird permissions
 async fn modify_outside_with_relative_symlink() {
@@ -265,7 +266,7 @@ async fn modify_outside_with_relative_symlink() {
     assert!(!td.path().join("foo").exists());
 }
 
-#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn parent_paths_error() {
     let mut ar = async_tar::Builder::new(Vec::new());
@@ -294,7 +295,7 @@ async fn parent_paths_error() {
     assert!(File::open(td.path().join("foo").join("bar")).await.is_err());
 }
 
-#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 #[cfg(unix)]
 async fn good_parent_paths_ok() {
@@ -326,7 +327,7 @@ async fn good_parent_paths_ok() {
     t!(File::open(dst).await);
 }
 
-#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn modify_hard_link_just_created() {
     let mut ar = async_tar::Builder::new(Vec::new());
@@ -362,7 +363,7 @@ async fn modify_hard_link_just_created() {
     assert_eq!(contents.len(), 0);
 }
 
-#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn modify_symlink_just_created() {
     let mut ar = async_tar::Builder::new(Vec::new());
@@ -398,7 +399,7 @@ async fn modify_symlink_just_created() {
     assert_eq!(contents.len(), 0);
 }
 
-#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 #[cfg(unix)]
 async fn chmod_outside_with_directory_over_symlink() {
