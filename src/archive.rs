@@ -415,6 +415,18 @@ impl<R: Read + Unpin> Entries<R> {
             // so it doesn't leak onto the next entry
             *current_pax_extensions = None;
 
+            // GNU tar, bsdtar and Python disagree on which of the two names wins.
+            if new_fields.long_pathname.is_some() && new_fields.pax_value(b"path").is_some() {
+                return Poll::Ready(Some(Err(other(
+                    "a GNU long name and a pax path describe the same member",
+                ))));
+            }
+            if new_fields.long_linkname.is_some() && new_fields.pax_value(b"linkpath").is_some() {
+                return Poll::Ready(Some(Err(other(
+                    "a GNU long link and a pax linkpath describe the same member",
+                ))));
+            }
+
             let State {
                 next,
                 current_header_pos,

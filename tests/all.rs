@@ -1790,3 +1790,66 @@ async fn size_on_entry_without_data_is_rejected() {
     let tar = dataless_member(b'5', 0, Some(0));
     assert_eq!(read_entries(&tar[..]).await.len(), 2);
 }
+
+fn push_pax(tar: &mut Vec<u8>, records: &[u8]) {
+    let mut x = Header::new_ustar();
+    t!(x.set_path("PaxHeaders/0"));
+    x.set_entry_type(EntryType::new(b'x'));
+    x.set_size(records.len() as u64);
+    x.set_cksum();
+    push_block(tar, x.as_bytes());
+    push_block(tar, records);
+}
+
+fn push_gnu_long(tar: &mut Vec<u8>, typeflag: u8, name: &str) {
+    let mut long = Header::new_gnu();
+    t!(long.set_path("././@LongLink"));
+    long.set_entry_type(EntryType::new(typeflag));
+    long.set_size(name.len() as u64 + 1);
+    long.set_cksum();
+    push_block(tar, long.as_bytes());
+    push_block(tar, format!("{name}\0").as_bytes());
+}
+
+fn push_member(tar: &mut Vec<u8>, entry_type: EntryType) {
+    let mut member = Header::new_gnu();
+    t!(member.set_path("from-header"));
+    member.set_entry_type(entry_type);
+    if entry_type == EntryType::Symlink {
+        t!(member.set_link_name("from-header"));
+    }
+    member.set_size(0);
+    member.set_cksum();
+    push_block(tar, member.as_bytes());
+    tar.extend(repeat(0u8).take(BLOCK * 2));
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn mixed_pax_and_gnu_names_are_rejected() {
+    let mut pax_then_gnu = Vec::new();
+    push_pax(&mut pax_then_gnu, &pax_record("path", "from-pax"));
+    push_gnu_long(&mut pax_then_gnu, b'L', "from-gnu");
+    push_member(&mut pax_then_gnu, EntryType::Regular);
+
+    let mut gnu_then_pax = Vec::new();
+    push_gnu_long(&mut gnu_then_pax, b'L', "from-gnu");
+    push_pax(&mut gnu_then_pax, &pax_record("path", "from-pax"));
+    push_member(&mut gnu_then_pax, EntryType::Regular);
+
+    let mut links = Vec::new();
+    push_pax(&mut links, &pax_record("linkpath", "from-pax"));
+    push_gnu_long(&mut links, b'K', "from-gnu");
+    push_member(&mut links, EntryType::Symlink);
+
+    for tar in [pax_then_gnu, gnu_then_pax, links] {
+        let mut entries = t!(Archive::new(&tar[..]).entries());
+        assert!(entries.next().await.unwrap().is_err());
+    }
+
+    let mut gnu_and_mtime = Vec::new();
+    push_gnu_long(&mut gnu_and_mtime, b'L', "from-gnu");
+    push_pax(&mut gnu_and_mtime, &pax_record("mtime", "1"));
+    push_member(&mut gnu_and_mtime, EntryType::Regular);
+    assert_eq!(read_entries(&gnu_and_mtime[..]).await[0].0, b"from-gnu");
+}
