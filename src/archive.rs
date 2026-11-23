@@ -317,9 +317,8 @@ impl<R: Read + Unpin> Archive<R> {
         // unpacked paths over 260 characters will fail on creation with a
         // NotFound exception.
 
-        let dst = &fs_canonicalize(dst)
-            .await
-            .unwrap_or_else(|_| dst.to_path_buf());
+        let canon_dst = fs_canonicalize(dst).await.ok();
+        let dst = canon_dst.as_deref().unwrap_or(dst);
 
         // Delay any directory entries until the end (they will be created if needed by
         // descendants), to ensure that directory permissions do not interfer with descendant
@@ -330,11 +329,11 @@ impl<R: Read + Unpin> Archive<R> {
             if file.header().entry_type() == crate::EntryType::Directory {
                 directories.push(file);
             } else {
-                file.unpack_in(dst).await?;
+                file.unpack_in_canonical(dst, canon_dst.as_deref()).await?;
             }
         }
         for mut dir in directories {
-            dir.unpack_in(dst).await?;
+            dir.unpack_in_canonical(dst, canon_dst.as_deref()).await?;
         }
 
         Ok(())
