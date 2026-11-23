@@ -2081,3 +2081,21 @@ async fn pax_numbers_must_be_plain_decimal() {
     push_member(&mut tar, EntryType::Regular);
     assert_eq!(read_entries(&tar[..]).await.len(), 1);
 }
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn unknown_magic_version_is_rejected() {
+    for (magic, version) in [(b"ustar\0", b"01"), (b"ustar ", b"00")] {
+        let mut header = Header::new_ustar();
+        t!(header.set_path("a"));
+        header.set_size(0);
+        header.as_mut_bytes()[257..263].copy_from_slice(magic);
+        header.as_mut_bytes()[263..265].copy_from_slice(version);
+        header.set_cksum();
+
+        let mut tar = Vec::new();
+        push_block(&mut tar, header.as_bytes());
+        tar.extend(repeat(0u8).take(BLOCK * 2));
+        assert!(is_rejected(&tar).await);
+    }
+}

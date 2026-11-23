@@ -592,6 +592,13 @@ fn poll_next_raw<R: Read + Unpin>(
         return Poll::Ready(Some(Err(other("archive header checksum mismatch"))));
     }
 
+    // Readers disagree on whether such a header has a prefix field.
+    if header.has_unknown_version() {
+        return Poll::Ready(Some(Err(other(
+            "archive header has an unknown ustar or GNU version",
+        ))));
+    }
+
     let file_pos = *next;
 
     let mut header = current_header.take().unwrap();

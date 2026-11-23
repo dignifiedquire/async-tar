@@ -197,6 +197,12 @@ impl Header {
         ustar.magic[..] == b"ustar "[..] && ustar.version[..] == b" \0"[..]
     }
 
+    pub(crate) fn has_unknown_version(&self) -> bool {
+        let ustar = unsafe { cast::<_, UstarHeader>(self) };
+        let has_magic = ustar.magic[..] == b"ustar\0"[..] || ustar.magic[..] == b"ustar "[..];
+        has_magic && !self.is_ustar() && !self.is_gnu()
+    }
+
     /// View this archive header as a raw "old" archive header.
     ///
     /// This view will always succeed as all archive header formats will fill
