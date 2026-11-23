@@ -33,6 +33,7 @@ use crate::{
 ///
 /// [`into_inner`]: Builder::into_inner
 /// [`finish`]: Builder::finish
+#[derive(Debug)]
 pub struct Builder<W: Write + Unpin> {
     mode: HeaderMode,
     follow: bool,

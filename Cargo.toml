@@ -39,6 +39,12 @@ xattr = { version = "1.6", optional = true }
 [target.'cfg(target_os = "redox")'.dependencies]
 redox_syscall = "0.9"
 
+[lints.rust]
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+unused_async = "warn"
+
 [features]
 default = ["xattr", "runtime-smol"]
 runtime-smol = ["async-fs", "futures-lite"]

@@ -58,6 +58,7 @@ pub struct ArchiveInner<R: Read + Unpin> {
 }
 
 /// Configure the archive.
+#[derive(Debug)]
 pub struct ArchiveBuilder<R: Read + Unpin> {
     obj: R,
     unpack_xattrs: bool,
@@ -567,6 +568,7 @@ impl<R: Read + Unpin> Stream for Entries<R> {
 }
 
 /// Stream of raw `Entry`s.
+#[derive(Debug)]
 pub struct RawEntries<R: Read + Unpin> {
     archive: Archive<R>,
     current: (u64, Option<Header>, usize),

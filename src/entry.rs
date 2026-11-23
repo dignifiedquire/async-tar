@@ -862,6 +862,8 @@ impl<R: Read + Unpin> EntryFields<R> {
             not(feature = "xattr"),
             target_arch = "wasm32"
         ))]
+        // This keeps the async signature of the xattr version.
+        #[allow(clippy::unused_async)]
         async fn set_xattrs<R: Read + Unpin>(_: &mut EntryFields<R>, _: &Path) -> io::Result<()> {
             Ok(())
         }
