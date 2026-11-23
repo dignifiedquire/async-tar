@@ -1,3 +1,5 @@
+#[cfg(feature = "runtime-tokio")]
+use std::mem::MaybeUninit;
 use std::{
     cmp,
     collections::VecDeque,
@@ -1191,10 +1193,11 @@ fn poll_skip<R: Read + Unpin>(
     cx: &mut Context<'_>,
     mut amt: u64,
 ) -> Poll<io::Result<()>> {
-    let mut buf = [0u8; 4096 * 8];
+    // The skipped bytes are never read, so the buffer is left uninitialized.
+    let mut buf = [MaybeUninit::<u8>::uninit(); 4096 * 8];
     while amt > 0 {
         let n = cmp::min(amt, buf.len() as u64);
-        let mut read_buf = io::ReadBuf::new(&mut buf[..n as usize]);
+        let mut read_buf = io::ReadBuf::uninit(&mut buf[..n as usize]);
         let start = read_buf.filled().len();
         match ready!(Pin::new(&mut source).poll_read(cx, &mut read_buf)) {
             Ok(()) => {
