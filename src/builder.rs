@@ -194,8 +194,10 @@ impl<W: Write + Unpin> Builder<W> {
         path: P,
         data: R,
     ) -> io::Result<()> {
-        prepare_header_path(self.get_mut(), header, path.as_ref()).await?;
+        let mut extensions = Vec::new();
+        prepare_header_path(&mut extensions, header, path.as_ref()).await?;
         header.set_cksum();
+        self.get_mut().write_all(&extensions).await?;
         self.append(header, data).await?;
 
         Ok(())
@@ -595,12 +597,16 @@ async fn append_fs<W: Write + Unpin + ?Sized>(
 ) -> io::Result<()> {
     let mut header = Header::new_gnu();
 
-    prepare_header_path(dst, &mut header, path).await?;
+    // The extension headers are written once every field is set, so a rejected field
+    // leaves none in the stream.
+    let mut extensions = Vec::new();
+    prepare_header_path(&mut extensions, &mut header, path).await?;
     header.set_metadata_in_mode(meta, mode);
     if let Some(link_name) = link_name {
-        prepare_header_link(dst, &mut header, link_name).await?;
+        prepare_header_link(&mut extensions, &mut header, link_name).await?;
     }
     header.set_cksum();
+    dst.write_all(&extensions).await?;
     append(dst, &header, read).await?;
 
     Ok(())
@@ -746,6 +752,28 @@ mod tests {
         entry.read_to_end(&mut contents).await.unwrap();
         assert_eq!(contents, b"abcd");
         assert!(entries.next().await.is_none());
+    }
+
+    #[cfg_attr(
+        feature = "runtime-smol",
+        macro_rules_attribute::apply(smol_macros::test!)
+    )]
+    #[cfg_attr(feature = "runtime-tokio", tokio::test)]
+    async fn rejected_link_name_leaves_no_long_name() {
+        let meta = std::fs::metadata("Cargo.toml").unwrap();
+        let path = Path::new("a").join("b".repeat(200));
+        let mut dst = Vec::new();
+        let appended = append_fs(
+            &mut dst,
+            &path,
+            &meta,
+            &mut io::empty(),
+            HeaderMode::Deterministic,
+            Some(Path::new("")),
+        )
+        .await;
+        assert!(appended.is_err());
+        assert!(dst.is_empty());
     }
 
     fn assert_send<T: Send>(_: &T) {}
