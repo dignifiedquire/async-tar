@@ -2232,6 +2232,28 @@ async fn truncated_member_reads_fail() {
     assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
 }
 
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn failed_long_name_append_leaves_no_long_name() {
+    let mut ar = Builder::new(Vec::new());
+    let mut header = Header::new_gnu();
+    header.set_size(0);
+    let rejected = format!("../{}", "a".repeat(200));
+    assert!(
+        ar.append_data(&mut header, &rejected, &[][..])
+            .await
+            .is_err()
+    );
+
+    let mut header = Header::new_gnu();
+    header.set_size(0);
+    t!(ar.append_data(&mut header, "innocent.txt", &[][..]).await);
+    let tar = t!(ar.into_inner().await);
+
+    let entries = read_entries(&tar[..]).await;
+    assert_eq!(entries, [(b"innocent.txt".to_vec(), Vec::new())]);
+}
+
 async fn is_rejected(tar: &[u8]) -> bool {
     let mut entries = t!(Archive::new(tar).entries());
     while let Some(entry) = entries.next().await {

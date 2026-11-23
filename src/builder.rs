@@ -554,14 +554,15 @@ async fn prepare_header_path<W: Write + Unpin + ?Sized>(
         if data.len() < max {
             return Err(e);
         }
+        // Truncate the path to store in the header we're about to emit to
+        // ensure we've got something at least mentioned. It is checked before
+        // the long name is written, so a rejected path leaves no long name.
+        let path = bytes2path(Cow::Borrowed(&data[..max]))?;
+        header.set_truncated_path_for_gnu_header(&path)?;
         let header2 = prepare_header(data.len() as u64, EntryType::GNULongName);
         // null-terminated string
         let mut data2 = data.chain(io::repeat(0).take(1));
         append(dst, &header2, &mut data2).await?;
-        // Truncate the path to store in the header we're about to emit to
-        // ensure we've got something at least mentioned.
-        let path = bytes2path(Cow::Borrowed(&data[..max]))?;
-        header.set_truncated_path_for_gnu_header(&path)?;
     }
     Ok(())
 }
