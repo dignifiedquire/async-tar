@@ -186,6 +186,7 @@ impl<R: Read + Unpin> Archive<R> {
             gnu_longlink: None,
             gnu_longname: None,
             pax_extensions: None,
+            is_v7_archive: None,
             is_done: false,
         })
     }
@@ -297,6 +298,7 @@ pub struct Entries<R: Read + Unpin> {
     gnu_longname: Option<Vec<u8>>,
     gnu_longlink: Option<Vec<u8>>,
     pax_extensions: Option<Vec<u8>>,
+    is_v7_archive: Option<bool>,
     is_done: bool,
 }
 
@@ -333,6 +335,7 @@ impl<R: Read + Unpin> Entries<R> {
                 gnu_longlink,
                 archive,
                 pax_extensions,
+                is_v7_archive,
                 ..
             } = &mut *self;
             let State {
@@ -375,6 +378,14 @@ impl<R: Read + Unpin> Entries<R> {
                 return Poll::Ready(Some(Err(other(
                     "Solaris extended headers are not supported",
                 ))));
+            }
+            // The first header decides the format, and readers disagree on a pax header
+            // in a v7 archive.
+            let is_v7_archive = *is_v7_archive.get_or_insert(!is_recognized_header);
+            let is_pax =
+                entry_type.is_pax_local_extensions() || entry_type.is_pax_global_extensions();
+            if is_v7_archive && is_pax {
+                return Poll::Ready(Some(Err(other("a pax header in a v7 archive"))));
             }
             // POSIX extracts an unknown type as a file, but readers disagree on whether
             // it has data.

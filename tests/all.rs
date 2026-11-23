@@ -2117,3 +2117,24 @@ async fn unknown_entry_types_are_rejected() {
         assert!(is_rejected(&tar).await, "{}", typeflag as char);
     }
 }
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pax_header_in_v7_archive_is_rejected() {
+    let mut v7 = Header::new_old();
+    t!(v7.set_path("a"));
+    v7.set_size(0);
+    v7.set_cksum();
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, v7.as_bytes());
+    push_pax(&mut tar, &pax_record("path", "renamed"));
+    push_member(&mut tar, EntryType::Regular);
+    assert!(is_rejected(&tar).await);
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, v7.as_bytes());
+    push_block(&mut tar, v7.as_bytes());
+    tar.extend(repeat(0u8).take(BLOCK * 2));
+    assert_eq!(read_entries(&tar[..]).await.len(), 2);
+}
