@@ -1719,3 +1719,21 @@ async fn entries_end_after_an_error() {
     assert!(raw.next().await.unwrap().is_err());
     assert!(raw.next().await.is_none());
 }
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn ustar_with_nul_version_reads_prefix() {
+    let path = format!("{}/{}", "p".repeat(60), "n".repeat(60));
+    let mut header = Header::new_ustar();
+    t!(header.set_path(&path));
+    header.set_size(0);
+    header.as_mut_bytes()[263..265].copy_from_slice(b"\0\0");
+    header.set_cksum();
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, header.as_bytes());
+    tar.extend(repeat(0u8).take(BLOCK * 2));
+
+    let entries = read_entries(&tar[..]).await;
+    assert_eq!(entries[0].0, path.as_bytes());
+}
