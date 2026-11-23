@@ -1737,3 +1737,56 @@ async fn ustar_with_nul_version_reads_prefix() {
     let entries = read_entries(&tar[..]).await;
     assert_eq!(entries[0].0, path.as_bytes());
 }
+
+fn dataless_member(typeflag: u8, size: u64, pax_size: Option<u64>) -> Vec<u8> {
+    let mut tar = Vec::new();
+    if let Some(pax_size) = pax_size {
+        let recs = pax_record("size", &pax_size.to_string());
+        let mut x = Header::new_ustar();
+        t!(x.set_path("PaxHeaders/0"));
+        x.set_entry_type(EntryType::new(b'x'));
+        x.set_size(recs.len() as u64);
+        x.set_cksum();
+        push_block(&mut tar, x.as_bytes());
+        push_block(&mut tar, &recs);
+    }
+
+    let mut member = Header::new_ustar();
+    t!(member.set_path("member"));
+    member.set_entry_type(EntryType::new(typeflag));
+    if typeflag == b'1' || typeflag == b'2' {
+        t!(member.set_link_name("target"));
+    }
+    member.set_size(size);
+    member.set_cksum();
+    push_block(&mut tar, member.as_bytes());
+
+    let mut next = Header::new_ustar();
+    t!(next.set_path("next"));
+    next.set_size(0);
+    next.set_cksum();
+    push_block(&mut tar, next.as_bytes());
+    tar.extend(repeat(0u8).take(BLOCK * 2));
+    tar
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn size_on_entry_without_data_is_rejected() {
+    let cases = [
+        (b'5', 512, None),
+        (b'1', 512, None),
+        (b'5', 0, Some(512)),
+        (b'1', 0, Some(512)),
+        (b'2', 0, Some(512)),
+    ];
+    for (typeflag, size, pax_size) in cases {
+        let tar = dataless_member(typeflag, size, pax_size);
+        let mut entries = t!(Archive::new(&tar[..]).entries());
+        let first = entries.next().await.unwrap();
+        assert!(first.is_err(), "typeflag {}", typeflag as char);
+    }
+
+    let tar = dataless_member(b'5', 0, Some(0));
+    assert_eq!(read_entries(&tar[..]).await.len(), 2);
+}

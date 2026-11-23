@@ -24,7 +24,7 @@ use tokio::{
 use tokio_stream::{Stream, StreamExt};
 
 use crate::{
-    Entry, GnuExtSparseHeader, GnuSparseHeader, Header,
+    Entry, EntryType, GnuExtSparseHeader, GnuSparseHeader, Header,
     entry::{EntryFields, EntryIo},
     error::TarError,
     fs_canonicalize, other,
@@ -614,6 +614,23 @@ fn poll_next_raw<R: Read + Unpin>(
                 }
             }
         }
+    }
+
+    // POSIX stores no data for these types, and readers disagree on what a size
+    // on them means.
+    let is_dataless = matches!(
+        entry_type,
+        EntryType::Link
+            | EntryType::Symlink
+            | EntryType::Char
+            | EntryType::Block
+            | EntryType::Directory
+            | EntryType::Fifo
+    );
+    if is_dataless && size != 0 {
+        return Poll::Ready(Some(Err(other(
+            "archive header has a size on an entry type without data",
+        ))));
     }
 
     let data = EntryIo::Data(archive.clone().take(size));
