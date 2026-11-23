@@ -1,6 +1,6 @@
 [package]
 name = "async-tar"
-version = "0.6.1"
+version = "0.6.2"
 authors = ["dignifiedquire <me@dignifiequire.com>", "Alex Crichton <alex@alexcrichton.com>"]
 repository = "https://github.com/dignifiedquire/async-tar"
 documentation = "https://docs.rs/async-tar"
