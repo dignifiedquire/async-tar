@@ -1955,6 +1955,48 @@ async fn malformed_pax_records_are_rejected() {
     }
 }
 
+fn push_file(tar: &mut Vec<u8>, path: &str, data: &[u8]) {
+    let mut header = Header::new_ustar();
+    t!(header.set_path(path));
+    header.set_size(data.len() as u64);
+    header.set_cksum();
+    push_block(tar, header.as_bytes());
+    push_block(tar, data);
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pax_records_after_nul_padding_are_rejected() {
+    let mut smuggled = Vec::new();
+    push_file(&mut smuggled, "smuggled.txt", b"pwned\n");
+    let mut records = vec![0];
+    records.extend(pax_record("size", &smuggled.len().to_string()));
+    let mut tar = Vec::new();
+    push_pax(&mut tar, &records);
+    push_file(&mut tar, "carrier.txt", b"");
+    tar.extend(&smuggled);
+    tar.extend(repeat_n(0u8, BLOCK * 2));
+
+    let mut entries = t!(Archive::new(&tar[..]).entries());
+    let first = entries.next().await.unwrap();
+    assert!(first.is_err());
+    assert!(entries.next().await.is_none());
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pax_records_with_nul_padding_read() {
+    let mut records = pax_record("path", "padded.txt");
+    records.extend([0; 3]);
+    let mut tar = Vec::new();
+    push_pax(&mut tar, &records);
+    push_file(&mut tar, "from-header", b"data");
+    tar.extend(repeat_n(0u8, BLOCK * 2));
+
+    let entries = read_entries(&tar[..]).await;
+    assert_eq!(entries, [(b"padded.txt".to_vec(), b"data".to_vec())]);
+}
+
 async fn is_rejected(tar: &[u8]) -> bool {
     let mut entries = t!(Archive::new(tar).entries());
     while let Some(entry) = entries.next().await {
