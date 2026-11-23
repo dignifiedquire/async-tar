@@ -96,6 +96,16 @@ jobs:
           components: clippy
       - run: cargo clippy --no-default-features --features runtime-smol -- -D warnings
 
+  check_android:
+    name: Check Android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - run: cargo check --target aarch64-linux-android --lib
+
   docs:
     name: Check docs
     runs-on: ubuntu-latest
