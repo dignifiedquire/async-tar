@@ -2065,3 +2065,19 @@ async fn signed_or_unterminated_size_is_rejected() {
         10
     );
 }
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pax_numbers_must_be_plain_decimal() {
+    for size in ["+512", "0777"] {
+        let mut tar = Vec::new();
+        push_pax(&mut tar, &pax_record("size", size));
+        push_member(&mut tar, EntryType::Regular);
+        assert!(is_rejected(&tar).await, "{size}");
+    }
+
+    let mut tar = Vec::new();
+    push_pax(&mut tar, &pax_record("size", "0"));
+    push_member(&mut tar, EntryType::Regular);
+    assert_eq!(read_entries(&tar[..]).await.len(), 1);
+}

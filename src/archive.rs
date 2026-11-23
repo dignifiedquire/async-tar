@@ -633,9 +633,8 @@ fn poll_next_raw<R: Read + Unpin>(
                     let size_str = extension
                         .value()
                         .map_err(|_e| other("failed to parse pax size as string"))?;
-                    size = size_str
-                        .parse::<u64>()
-                        .map_err(|_e| other("failed to parse pax size"))?;
+                    size = parse_pax_number(size_str)
+                        .ok_or_else(|| other("failed to parse pax size"))?;
                 }
 
                 "uid" => {
@@ -643,9 +642,8 @@ fn poll_next_raw<R: Read + Unpin>(
                         .value()
                         .map_err(|_e| other("failed to parse pax uid as string"))?;
                     header.set_uid(
-                        uid_str
-                            .parse::<u64>()
-                            .map_err(|_e| other("failed to parse pax uid"))?,
+                        parse_pax_number(uid_str)
+                            .ok_or_else(|| other("failed to parse pax uid"))?,
                     );
                 }
 
@@ -654,9 +652,8 @@ fn poll_next_raw<R: Read + Unpin>(
                         .value()
                         .map_err(|_e| other("failed to parse pax gid as string"))?;
                     header.set_gid(
-                        gid_str
-                            .parse::<u64>()
-                            .map_err(|_e| other("failed to parse pax gid"))?,
+                        parse_pax_number(gid_str)
+                            .ok_or_else(|| other("failed to parse pax gid"))?,
                     );
                 }
 
@@ -714,6 +711,15 @@ fn poll_next_raw<R: Read + Unpin>(
     *next += size;
 
     Poll::Ready(Some(Ok(ret.into_entry())))
+}
+
+// POSIX writes pax numbers in plain decimal, and readers disagree on what a sign
+// or a leading zero means.
+fn parse_pax_number(value: &str) -> Option<u64> {
+    let is_plain = !value.is_empty()
+        && value.bytes().all(|b| b.is_ascii_digit())
+        && (value == "0" || !value.starts_with('0'));
+    if is_plain { value.parse().ok() } else { None }
 }
 
 fn poll_parse_sparse_header<R: Read + Unpin>(
