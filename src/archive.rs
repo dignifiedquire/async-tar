@@ -170,7 +170,7 @@ impl<R: Read + Unpin> Archive<R> {
     /// Note that care must be taken to consider each entry within an archive in
     /// sequence. If entries are processed out of sequence (from what the
     /// stream returns), then the contents read for each entry may be
-    /// corrupted.
+    /// corrupted. The stream ends after its first error.
     pub fn entries(self) -> io::Result<Entries<R>> {
         if self.inner.lock().unwrap().pos != 0 {
             return Err(other(
@@ -187,6 +187,7 @@ impl<R: Read + Unpin> Archive<R> {
             gnu_longlink: None,
             gnu_longname: None,
             pax_extensions: None,
+            is_done: false,
         })
     }
 
@@ -195,7 +196,7 @@ impl<R: Read + Unpin> Archive<R> {
     /// Note that care must be taken to consider each entry within an archive in
     /// sequence. If entries are processed out of sequence (from what the
     /// stream returns), then the contents read for each entry may be
-    /// corrupted.
+    /// corrupted. The stream ends after its first error.
     pub fn entries_raw(self) -> io::Result<RawEntries<R>> {
         if self.inner.lock().unwrap().pos != 0 {
             return Err(other(
@@ -207,6 +208,7 @@ impl<R: Read + Unpin> Archive<R> {
         Ok(RawEntries {
             archive: self,
             current: (0, None, 0),
+            is_done: false,
         })
     }
 
@@ -296,6 +298,7 @@ pub struct Entries<R: Read + Unpin> {
     gnu_longname: Option<Vec<u8>>,
     gnu_longlink: Option<Vec<u8>>,
     pax_extensions: Option<Vec<u8>>,
+    is_done: bool,
 }
 
 macro_rules! ready_opt_err {
@@ -317,10 +320,11 @@ macro_rules! ready_err {
     };
 }
 
-impl<R: Read + Unpin> Stream for Entries<R> {
-    type Item = io::Result<Entry<Archive<R>>>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+impl<R: Read + Unpin> Entries<R> {
+    fn poll_next_entry(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<io::Result<Entry<Archive<R>>>>> {
         loop {
             let Self {
                 current,
@@ -433,19 +437,45 @@ impl<R: Read + Unpin> Stream for Entries<R> {
     }
 }
 
+impl<R: Read + Unpin> Stream for Entries<R> {
+    type Item = io::Result<Entry<Archive<R>>>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.is_done {
+            return Poll::Ready(None);
+        }
+        let item = ready!(self.as_mut().poll_next_entry(cx));
+        self.is_done = !matches!(item, Some(Ok(_)));
+        Poll::Ready(item)
+    }
+}
+
 /// Stream of raw `Entry`s.
 pub struct RawEntries<R: Read + Unpin> {
     archive: Archive<R>,
     current: (u64, Option<Header>, usize),
+    is_done: bool,
 }
 
 impl<R: Read + Unpin> Stream for RawEntries<R> {
     type Item = io::Result<Entry<Archive<R>>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.is_done {
+            return Poll::Ready(None);
+        }
         let archive = self.archive.clone();
         let (next, current_header, current_header_pos) = &mut self.current;
-        poll_next_raw(&archive, next, current_header, current_header_pos, None, cx)
+        let item = ready!(poll_next_raw(
+            &archive,
+            next,
+            current_header,
+            current_header_pos,
+            None,
+            cx
+        ));
+        self.is_done = !matches!(item, Some(Ok(_)));
+        Poll::Ready(item)
     }
 }
 

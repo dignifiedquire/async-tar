@@ -1703,3 +1703,19 @@ async fn pending_reads_do_not_change_entries() {
     }
     assert_eq!(read_entries(&long_sparse[..]).await[0].0, name.as_bytes());
 }
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn entries_end_after_an_error() {
+    let tar = &tar!("reading_files.tar")[..600];
+
+    let mut entries = t!(Archive::new(tar).entries());
+    assert!(entries.next().await.unwrap().is_ok());
+    assert!(entries.next().await.unwrap().is_err());
+    assert!(entries.next().await.is_none());
+
+    let mut raw = t!(Archive::new(tar).entries_raw());
+    assert!(raw.next().await.unwrap().is_ok());
+    assert!(raw.next().await.unwrap().is_err());
+    assert!(raw.next().await.is_none());
+}
