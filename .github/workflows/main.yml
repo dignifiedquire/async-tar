@@ -76,7 +76,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
+      - uses: taiki-e/install-action@v2
         with:
           tool: cargo-make
       - run: cargo make format-check
@@ -89,7 +89,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
+      - uses: taiki-e/install-action@v2
         with:
           tool: cargo-make
       - run: cargo make clippy-tokio
@@ -102,7 +102,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
+      - uses: taiki-e/install-action@v2
         with:
           tool: cargo-make
       - run: cargo make clippy-smol
