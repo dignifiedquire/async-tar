@@ -5,7 +5,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use async_tar::{Archive, ArchiveBuilder, Builder, EntryType, GnuExtSparseHeader, Header};
+use async_tar::{
+    Archive, ArchiveBuilder, Builder, EntryType, GnuExtSparseHeader, GnuSparseHeader, Header,
+};
 #[cfg(feature = "runtime-smol")]
 use smol::{
     fs::{self, File},
@@ -1551,8 +1553,8 @@ async fn sparse_extension_does_not_carry_to_next_entry() {
     carrier.set_size(1024);
     {
         let gnu = carrier.as_gnu_mut().unwrap();
-        gnu.sparse[0].offset = sparse_octal(0);
-        gnu.sparse[0].numbytes = sparse_octal(1024);
+        gnu.sparse = std::array::from_fn(|_| sparse_slot(1024, 0));
+        gnu.sparse[0] = sparse_slot(0, 1024);
         gnu.isextended = [1];
         gnu.realsize = sparse_octal(1024);
     }
@@ -1577,16 +1579,29 @@ async fn sparse_extension_does_not_carry_to_next_entry() {
     assert_eq!(&entries[1].1[BLOCK..], smuggled.as_bytes());
 }
 
-fn sparse_member(ext_headers: usize) -> Vec<u8> {
+fn sparse_slot(offset: u64, len: u64) -> GnuSparseHeader {
+    GnuSparseHeader {
+        offset: sparse_octal(offset),
+        numbytes: sparse_octal(len),
+    }
+}
+
+fn empty_slot() -> GnuSparseHeader {
+    GnuSparseHeader {
+        offset: [0; 12],
+        numbytes: [0; 12],
+    }
+}
+
+fn sparse_member(slots: [GnuSparseHeader; 4], ext_headers: usize) -> Vec<u8> {
     let mut member = Header::new_gnu();
     t!(member.set_path("sparse"));
     member.set_entry_type(EntryType::new(b'S'));
     member.set_size(BLOCK as u64);
     {
         let gnu = member.as_gnu_mut().unwrap();
-        gnu.sparse[0].offset = sparse_octal(0);
-        gnu.sparse[0].numbytes = sparse_octal(BLOCK as u64);
-        gnu.isextended = [1];
+        gnu.sparse = slots;
+        gnu.isextended = [u8::from(ext_headers > 0)];
         gnu.realsize = sparse_octal(BLOCK as u64);
     }
     member.set_cksum();
@@ -1595,6 +1610,7 @@ fn sparse_member(ext_headers: usize) -> Vec<u8> {
     push_block(&mut tar, member.as_bytes());
     for i in 0..ext_headers {
         let mut ext = GnuExtSparseHeader::new();
+        ext.sparse = std::array::from_fn(|_| sparse_slot(BLOCK as u64, 0));
         ext.isextended = [u8::from(i + 1 < ext_headers)];
         push_block(&mut tar, ext.as_bytes());
     }
@@ -1606,10 +1622,29 @@ fn sparse_member(ext_headers: usize) -> Vec<u8> {
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn sparse_maps_over_one_mib_are_rejected() {
-    let entries = read_entries(&sparse_member(2048)[..]).await;
+    let slots = || {
+        std::array::from_fn(|i| match i {
+            0 => sparse_slot(0, BLOCK as u64),
+            _ => sparse_slot(BLOCK as u64, 0),
+        })
+    };
+
+    let entries = read_entries(&sparse_member(slots(), 2048)[..]).await;
     assert_eq!(entries, [(b"sparse".to_vec(), vec![b'A'; BLOCK])]);
 
-    assert!(is_rejected(&sparse_member(2049)).await);
+    assert!(is_rejected(&sparse_member(slots(), 2049)).await);
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn sparse_maps_with_an_entry_after_an_empty_slot_are_rejected() {
+    let data = || sparse_slot(0, BLOCK as u64);
+
+    let slot_after_empty = [empty_slot(), data(), empty_slot(), empty_slot()];
+    assert!(is_rejected(&sparse_member(slot_after_empty, 0)).await);
+
+    let extended_after_empty = [data(), empty_slot(), empty_slot(), empty_slot()];
+    assert!(is_rejected(&sparse_member(extended_after_empty, 1)).await);
 }
 
 struct PendingReader<'a> {

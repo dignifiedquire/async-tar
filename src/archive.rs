@@ -1,7 +1,7 @@
 use std::{
     cmp,
     collections::VecDeque,
-    mem,
+    iter, mem,
     path::Path,
     pin::Pin,
     sync::{Arc, Mutex},
@@ -895,6 +895,25 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
     }
     let ext_headers = mem::take(ext_headers);
     entry.data.clear();
+
+    // The map ends at its first empty slot, so no slot after it may be set.
+    let maps = iter::once((&gnu.sparse[..], gnu.is_extended())).chain(
+        ext_headers
+            .iter()
+            .map(|ext| (&ext.sparse[..], ext.is_extended())),
+    );
+    let mut is_ended = false;
+    for (slots, is_extended) in maps {
+        for slot in slots {
+            if !slot.is_empty() && is_ended {
+                return Poll::Ready(Err(other("a GNU sparse map entry after an empty slot")));
+            }
+            is_ended |= slot.is_empty();
+        }
+        if is_ended && is_extended {
+            return Poll::Ready(Err(other("a GNU sparse map extended after an empty slot")));
+        }
+    }
 
     let mut cur = 0;
     let mut remaining = entry.size;
