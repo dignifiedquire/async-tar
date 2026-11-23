@@ -1,7 +1,7 @@
 #[cfg(feature = "runtime-tokio")]
 use std::path::Path;
 use std::{
-    cmp,
+    cmp, mem,
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll},
@@ -280,6 +280,7 @@ struct State {
     current_header: Option<Header>,
     current_header_pos: usize,
     current_ext: Option<GnuExtSparseHeader>,
+    ext_headers: Vec<GnuExtSparseHeader>,
     pax_extensions: Option<Vec<u8>>,
 }
 
@@ -400,6 +401,7 @@ impl<R: Read + Unpin> Stream for Entries<R> {
                 next,
                 current_header_pos,
                 current_ext,
+                ext_headers,
                 ..
             } = current;
             ready_err!(poll_parse_sparse_header(
@@ -407,6 +409,7 @@ impl<R: Read + Unpin> Stream for Entries<R> {
                 next,
                 current_ext,
                 current_header_pos,
+                ext_headers,
                 new_fields,
                 cx
             ));
@@ -606,6 +609,7 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
     next: &mut u64,
     current_ext: &mut Option<GnuExtSparseHeader>,
     current_ext_pos: &mut usize,
+    ext_headers: &mut Vec<GnuExtSparseHeader>,
     entry: &mut EntryFields<Archive<R>>,
     cx: &mut Context<'_>,
 ) -> Poll<io::Result<()>> {
@@ -637,6 +641,31 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
     // the same as the current offset (described by the list of blocks) as
     // well as the amount of data read equals the size of the entry
     // (`Header::entry_size`).
+    //
+    // Every extension header is read before any block is added, so a Pending
+    // read resumes the headers without dropping the blocks of earlier ones.
+    while ext_headers
+        .last()
+        .map_or(gnu.is_extended(), |ext| ext.is_extended())
+    {
+        if current_ext.is_none() {
+            *current_ext_pos = 0;
+        }
+        let ext = current_ext.get_or_insert_with(GnuExtSparseHeader::new);
+        match ready!(poll_try_read_all(
+            archive.clone(),
+            cx,
+            ext.as_mut_bytes(),
+            current_ext_pos,
+        )) {
+            Ok(true) => {}
+            Ok(false) => return Poll::Ready(Err(other("failed to read extension"))),
+            Err(err) => return Poll::Ready(Err(err)),
+        }
+        *next += 512;
+        ext_headers.extend(current_ext.take());
+    }
+    let ext_headers = mem::take(ext_headers);
     entry.data.clear();
 
     let mut cur = 0;
@@ -678,36 +707,9 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
             data.push(EntryIo::Data(reader.clone().take(len)));
             Ok(())
         };
-        for block in &gnu.sparse {
+        let ext_blocks = ext_headers.iter().flat_map(|ext| &ext.sparse);
+        for block in gnu.sparse.iter().chain(ext_blocks) {
             add_block(block)?
-        }
-        if gnu.is_extended() {
-            let started_header = current_ext.is_some();
-            if !started_header {
-                let mut ext = GnuExtSparseHeader::new();
-                ext.isextended[0] = 1;
-                *current_ext = Some(ext);
-                *current_ext_pos = 0;
-            }
-
-            let ext = current_ext.as_mut().unwrap();
-            while ext.is_extended() {
-                match ready!(poll_try_read_all(
-                    archive.clone(),
-                    cx,
-                    ext.as_mut_bytes(),
-                    current_ext_pos,
-                )) {
-                    Ok(true) => {}
-                    Ok(false) => return Poll::Ready(Err(other("failed to read extension"))),
-                    Err(err) => return Poll::Ready(Err(err)),
-                }
-
-                *next += 512;
-                for block in &ext.sparse {
-                    add_block(block)?;
-                }
-            }
         }
     }
     if cur != gnu.real_size()? {

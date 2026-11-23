@@ -1558,3 +1558,67 @@ async fn pax_last_linkpath_wins() {
     let entry = t!(entries.next().await.unwrap());
     assert_eq!(&*entry.link_name_bytes().unwrap(), b"pax-target.txt");
 }
+
+async fn read_entries<R: Read + Unpin>(reader: R) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let mut entries = t!(Archive::new(reader).entries());
+    let mut out = Vec::new();
+    while let Some(entry) = entries.next().await {
+        let mut entry = t!(entry);
+        let mut data = Vec::new();
+        t!(entry.read_to_end(&mut data).await);
+        out.push((entry.path_bytes().into_owned(), data));
+    }
+    out
+}
+
+fn sparse_octal(n: u64) -> [u8; 12] {
+    let mut field = [0; 12];
+    field[..11].copy_from_slice(format!("{n:011o}").as_bytes());
+    field
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn two_extended_sparse_entries() {
+    let mut tar = tar!("sparse.tar")[2048..6144].repeat(2);
+    tar.extend(repeat(0u8).take(BLOCK * 2));
+
+    let entries = read_entries(&tar[..]).await;
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0], entries[1]);
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn sparse_extension_does_not_carry_to_next_entry() {
+    let mut carrier = Header::new_gnu();
+    t!(carrier.set_path("carrier"));
+    carrier.set_entry_type(EntryType::new(b'S'));
+    carrier.set_size(1024);
+    {
+        let gnu = carrier.as_gnu_mut().unwrap();
+        gnu.sparse[0].offset = sparse_octal(0);
+        gnu.sparse[0].numbytes = sparse_octal(1024);
+        gnu.isextended = [1];
+        gnu.realsize = sparse_octal(1024);
+    }
+    carrier.set_cksum();
+
+    let mut smuggled = Header::new_ustar();
+    t!(smuggled.set_path("smuggled.txt"));
+    smuggled.set_size(0);
+    smuggled.set_cksum();
+
+    let mut tar = tar!("sparse.tar")[2048..6144].to_vec();
+    push_block(&mut tar, carrier.as_bytes());
+    push_block(&mut tar, &[0; BLOCK]);
+    push_block(&mut tar, &[b'A'; BLOCK]);
+    push_block(&mut tar, smuggled.as_bytes());
+    tar.extend(repeat(0u8).take(BLOCK * 2));
+
+    let entries = read_entries(&tar[..]).await;
+    let names: Vec<_> = entries.iter().map(|(path, _)| &path[..]).collect();
+    assert_eq!(names, [&b"sparse_ext.txt"[..], b"carrier"]);
+    assert_eq!(&entries[1].1[..BLOCK], &[b'A'; BLOCK][..]);
+    assert_eq!(&entries[1].1[BLOCK..], smuggled.as_bytes());
+}
