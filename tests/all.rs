@@ -2161,6 +2161,23 @@ async fn names_with_a_nul_are_rejected() {
     }
 }
 
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn truncated_member_reads_fail() {
+    let mut header = Header::new_ustar();
+    t!(header.set_path("truncated.bin"));
+    header.set_size(4096);
+    header.set_cksum();
+    let mut tar = header.as_bytes().to_vec();
+    tar.extend([b'A'; 600]);
+
+    let mut entries = t!(Archive::new(&tar[..]).entries());
+    let mut entry = t!(entries.next().await.unwrap());
+    let mut data = Vec::new();
+    let err = entry.read_to_end(&mut data).await.unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+}
+
 async fn is_rejected(tar: &[u8]) -> bool {
     let mut entries = t!(Archive::new(tar).entries());
     while let Some(entry) = entries.next().await {

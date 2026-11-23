@@ -1013,7 +1013,13 @@ impl<R: Read + Unpin> Read for EntryIo<R> {
     ) -> Poll<io::Result<usize>> {
         match &mut *self {
             EntryIo::Pad(io) => Pin::new(io).poll_read(cx, into),
-            EntryIo::Data(io) => Pin::new(io).poll_read(cx, into),
+            EntryIo::Data(io) => {
+                let n = ready!(Pin::new(&mut *io).poll_read(cx, into))?;
+                if n == 0 && !into.is_empty() && io.limit() > 0 {
+                    return Poll::Ready(Err(truncation_error()));
+                }
+                Poll::Ready(Ok(n))
+            }
         }
     }
 }
@@ -1027,9 +1033,21 @@ impl<R: Read + Unpin> Read for EntryIo<R> {
     ) -> Poll<io::Result<()>> {
         match &mut *self {
             EntryIo::Pad(io) => Pin::new(io).poll_read(cx, into),
-            EntryIo::Data(io) => Pin::new(io).poll_read(cx, into),
+            EntryIo::Data(io) => {
+                let filled = into.filled().len();
+                ready!(Pin::new(&mut *io).poll_read(cx, into))?;
+                if into.filled().len() == filled && into.remaining() > 0 && io.limit() > 0 {
+                    return Poll::Ready(Err(truncation_error()));
+                }
+                Poll::Ready(Ok(()))
+            }
         }
     }
+}
+
+/// Returns the error for a truncated member.
+fn truncation_error() -> Error {
+    Error::new(ErrorKind::UnexpectedEof, "archive member is truncated")
 }
 
 struct Guard<'a> {
