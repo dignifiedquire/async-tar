@@ -353,19 +353,20 @@ impl<R: Read + Unpin> EntryFields<R> {
         }
     }
 
+    /// Appends the rest of this entry to `out`. The caller keeps `out` across a `Pending`.
     pub(crate) fn poll_read_all(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<io::Result<Vec<u8>>> {
+        out: &mut Vec<u8>,
+    ) -> Poll<io::Result<()>> {
         // Preallocate some data but don't let ourselves get too crazy now.
-        let cap = cmp::min(self.size, 128 * 1024);
-        let mut buf = Vec::with_capacity(cap as usize);
+        if out.capacity() == 0 {
+            out.reserve(cmp::min(self.size, 128 * 1024) as usize);
+        }
 
         // Copied from futures::ReadToEnd
-        match ready!(poll_read_all_internal(self, cx, &mut buf)) {
-            Ok(_) => Poll::Ready(Ok(buf)),
-            Err(err) => Poll::Ready(Err(err)),
-        }
+        ready!(poll_read_all_internal(self, cx, out))?;
+        Poll::Ready(Ok(()))
     }
 
     pub async fn read_all(&mut self) -> io::Result<Vec<u8>> {
@@ -387,17 +388,21 @@ impl<R: Read + Unpin> EntryFields<R> {
                 Cow::Borrowed(bytes)
             }
         } else {
-            if let Some(ref pax) = self.pax_extensions {
-                let pax = pax_extensions(pax)
-                    .filter_map(Result::ok)
-                    .find(|f| f.key_bytes() == b"path")
-                    .map(|f| f.value_bytes());
-                if let Some(field) = pax {
-                    return Cow::Borrowed(field);
-                }
+            if let Some(field) = self.pax_value(b"path") {
+                return Cow::Borrowed(field);
             }
             self.header.path_bytes()
         }
+    }
+
+    pub(crate) fn pax_value(&self, key: &[u8]) -> Option<&[u8]> {
+        let pax = self.pax_extensions.as_ref()?;
+        // POSIX gives the last of repeated records precedence, as GNU tar does.
+        pax_extensions(pax)
+            .filter_map(Result::ok)
+            .filter(|f| f.key_bytes() == key)
+            .last()
+            .map(|f| f.value_bytes())
     }
 
     /// Gets the path in a "lossy" way, used for error reporting ONLY.
@@ -421,7 +426,10 @@ impl<R: Read + Unpin> EntryFields<R> {
                     Some(Cow::Borrowed(bytes))
                 }
             }
-            None => self.header.link_name_bytes(),
+            None => match self.pax_value(b"linkpath") {
+                Some(field) => Some(Cow::Borrowed(field)),
+                None => self.header.link_name_bytes(),
+            },
         }
     }
 
@@ -509,7 +517,8 @@ impl<R: Read + Unpin> EntryFields<R> {
             Ok(()) => Ok(()),
             Err(err) => {
                 if err.kind() == ErrorKind::AlreadyExists {
-                    let prev = fs::metadata(dst).await;
+                    // A symlink must fail here, or set_perms would chmod its target.
+                    let prev = symlink_metadata(dst).await;
                     if prev.map(|m| m.is_dir()).unwrap_or(false) {
                         return Ok(());
                     }
@@ -627,6 +636,8 @@ impl<R: Read + Unpin> EntryFields<R> {
             || kind.is_pax_local_extensions()
             || kind.is_gnu_longname()
             || kind.is_gnu_longlink()
+            // Typeflag V is a GNU volume label, the name of the archive.
+            || kind.as_byte() == b'V'
         {
             return Ok(Unpacked::Other);
         };
@@ -709,7 +720,10 @@ impl<R: Read + Unpin> EntryFields<R> {
         if self.preserve_mtime {
             if let Ok(mtime) = self.header.mtime() {
                 let mtime = FileTime::from_unix_time(mtime as i64, 0);
-                filetime::set_file_times(dst, mtime, mtime).map_err(|e| {
+                // The std::fs::set_times replacement is newer than the 1.85 MSRV.
+                #[allow(deprecated)]
+                let result = filetime::set_file_times(dst, mtime, mtime);
+                result.map_err(|e| {
                     TarError::new(&format!("failed to set mtime for `{}`", dst.display()), e)
                 })?;
             }

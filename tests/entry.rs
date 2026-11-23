@@ -397,3 +397,45 @@ async fn modify_symlink_just_created() {
     t!(t!(File::open(&test).await).read_to_end(&mut contents).await);
     assert_eq!(contents.len(), 0);
 }
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+#[cfg(unix)]
+async fn chmod_outside_with_directory_over_symlink() {
+    use ::std::os::unix::fs::PermissionsExt;
+
+    let td = t!(Builder::new().prefix("tar").tempdir());
+    let outside = td.path().join("outside");
+    t!(std::fs::create_dir(&outside));
+    t!(std::fs::set_permissions(
+        &outside,
+        std::fs::Permissions::from_mode(0o700)
+    ));
+
+    let mut ar = async_tar::Builder::new(Vec::new());
+
+    let mut header = async_tar::Header::new_gnu();
+    header.set_size(0);
+    header.set_entry_type(async_tar::EntryType::Symlink);
+    t!(header.set_path("foo"));
+    t!(header.set_link_name(&outside));
+    header.set_cksum();
+    t!(ar.append(&header, &[][..]).await);
+
+    let mut header = async_tar::Header::new_gnu();
+    header.set_size(0);
+    header.set_entry_type(async_tar::EntryType::Directory);
+    t!(header.set_path("foo"));
+    header.set_mode(0o777);
+    header.set_cksum();
+    t!(ar.append(&header, &[][..]).await);
+
+    let bytes = t!(ar.into_inner().await);
+    let ar = async_tar::Archive::new(&bytes[..]);
+
+    let tar_dir = td.path().join("tar");
+    create_dir(&tar_dir).await.unwrap();
+    assert!(ar.unpack(tar_dir).await.is_err());
+    let mode = t!(std::fs::metadata(&outside)).permissions().mode();
+    assert_eq!(mode & 0o777, 0o700);
+}

@@ -1494,3 +1494,502 @@ async fn pax_size_does_not_leak_to_subsequent_entry() {
         second_body.len(),
     );
 }
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pax_last_path_wins() {
+    let mut recs = pax_record("path", "first.txt");
+    recs.extend(pax_record("path", "second.txt"));
+    let mut x = Header::new_ustar();
+    t!(x.set_path("PaxHeaders/0"));
+    x.set_entry_type(EntryType::new(b'x'));
+    x.set_size(recs.len() as u64);
+    x.set_cksum();
+
+    let body = b"hello\n";
+    let mut file = Header::new_ustar();
+    t!(file.set_path("header.txt"));
+    file.set_entry_type(EntryType::Regular);
+    file.set_size(body.len() as u64);
+    file.set_cksum();
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, x.as_bytes());
+    push_block(&mut tar, &recs);
+    push_block(&mut tar, file.as_bytes());
+    push_block(&mut tar, body);
+    tar.extend(repeat(0u8).take(BLOCK * 2));
+
+    let mut entries = t!(Archive::new(&tar[..]).entries());
+    let entry = t!(entries.next().await.unwrap());
+    assert_eq!(&*entry.path_bytes(), b"second.txt");
+
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
+    t!(Archive::new(&tar[..]).unpack(td.path()).await);
+    assert!(td.path().join("second.txt").exists());
+    assert!(!td.path().join("first.txt").exists());
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pax_last_linkpath_wins() {
+    let mut recs = pax_record("linkpath", "first-target.txt");
+    recs.extend(pax_record("linkpath", "pax-target.txt"));
+    let mut x = Header::new_ustar();
+    t!(x.set_path("PaxHeaders/0"));
+    x.set_entry_type(EntryType::new(b'x'));
+    x.set_size(recs.len() as u64);
+    x.set_cksum();
+
+    let mut link = Header::new_ustar();
+    t!(link.set_path("link"));
+    link.set_entry_type(EntryType::Symlink);
+    t!(link.set_link_name("ustar-target.txt"));
+    link.set_size(0);
+    link.set_cksum();
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, x.as_bytes());
+    push_block(&mut tar, &recs);
+    push_block(&mut tar, link.as_bytes());
+    tar.extend(repeat(0u8).take(BLOCK * 2));
+
+    let mut entries = t!(Archive::new(&tar[..]).entries());
+    let entry = t!(entries.next().await.unwrap());
+    assert_eq!(&*entry.link_name_bytes().unwrap(), b"pax-target.txt");
+}
+
+async fn read_entries<R: Read + Unpin>(reader: R) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let mut entries = t!(Archive::new(reader).entries());
+    let mut out = Vec::new();
+    while let Some(entry) = entries.next().await {
+        let mut entry = t!(entry);
+        let mut data = Vec::new();
+        t!(entry.read_to_end(&mut data).await);
+        out.push((entry.path_bytes().into_owned(), data));
+    }
+    out
+}
+
+fn sparse_octal(n: u64) -> [u8; 12] {
+    let mut field = [0; 12];
+    field[..11].copy_from_slice(format!("{n:011o}").as_bytes());
+    field
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn two_extended_sparse_entries() {
+    let mut tar = tar!("sparse.tar")[2048..6144].repeat(2);
+    tar.extend(repeat(0u8).take(BLOCK * 2));
+
+    let entries = read_entries(&tar[..]).await;
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0], entries[1]);
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn sparse_extension_does_not_carry_to_next_entry() {
+    let mut carrier = Header::new_gnu();
+    t!(carrier.set_path("carrier"));
+    carrier.set_entry_type(EntryType::new(b'S'));
+    carrier.set_size(1024);
+    {
+        let gnu = carrier.as_gnu_mut().unwrap();
+        gnu.sparse[0].offset = sparse_octal(0);
+        gnu.sparse[0].numbytes = sparse_octal(1024);
+        gnu.isextended = [1];
+        gnu.realsize = sparse_octal(1024);
+    }
+    carrier.set_cksum();
+
+    let mut smuggled = Header::new_ustar();
+    t!(smuggled.set_path("smuggled.txt"));
+    smuggled.set_size(0);
+    smuggled.set_cksum();
+
+    let mut tar = tar!("sparse.tar")[2048..6144].to_vec();
+    push_block(&mut tar, carrier.as_bytes());
+    push_block(&mut tar, &[0; BLOCK]);
+    push_block(&mut tar, &[b'A'; BLOCK]);
+    push_block(&mut tar, smuggled.as_bytes());
+    tar.extend(repeat(0u8).take(BLOCK * 2));
+
+    let entries = read_entries(&tar[..]).await;
+    let names: Vec<_> = entries.iter().map(|(path, _)| &path[..]).collect();
+    assert_eq!(names, [&b"sparse_ext.txt"[..], b"carrier"]);
+    assert_eq!(&entries[1].1[..BLOCK], &[b'A'; BLOCK][..]);
+    assert_eq!(&entries[1].1[BLOCK..], smuggled.as_bytes());
+}
+
+struct PendingReader<'a> {
+    data: &'a [u8],
+    is_pending: bool,
+}
+
+impl PendingReader<'_> {
+    fn poll_pending(&mut self, cx: &mut std::task::Context<'_>) -> bool {
+        self.is_pending = !self.is_pending;
+        if self.is_pending {
+            cx.waker().wake_by_ref();
+        }
+        self.is_pending
+    }
+}
+
+#[cfg(feature = "runtime-async-std")]
+impl Read for PendingReader<'_> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut [u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        if self.poll_pending(cx) {
+            return std::task::Poll::Pending;
+        }
+        let n = buf.len().min(self.data.len()).min(7);
+        buf[..n].copy_from_slice(&self.data[..n]);
+        self.data = &self.data[n..];
+        std::task::Poll::Ready(Ok(n))
+    }
+}
+
+#[cfg(feature = "runtime-tokio")]
+impl Read for PendingReader<'_> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        if self.poll_pending(cx) {
+            return std::task::Poll::Pending;
+        }
+        let n = buf.remaining().min(self.data.len()).min(7);
+        buf.put_slice(&self.data[..n]);
+        self.data = &self.data[n..];
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pending_reads_do_not_change_entries() {
+    let name = format!("long/{}/sparse_ext.txt", "n".repeat(120));
+    let mut long = Header::new_gnu();
+    t!(long.set_path("././@LongLink"));
+    long.set_entry_type(EntryType::new(b'L'));
+    long.set_size(name.len() as u64 + 1);
+    long.set_cksum();
+    let mut long_sparse = Vec::new();
+    push_block(&mut long_sparse, long.as_bytes());
+    push_block(&mut long_sparse, format!("{name}\0").as_bytes());
+    long_sparse.extend_from_slice(&tar!("sparse.tar")[2048..6144]);
+    long_sparse.extend(repeat(0u8).take(BLOCK * 2));
+
+    let archives = [
+        tar!("7z_long_path.tar"),
+        tar!("pax.tar"),
+        tar!("pax2.tar"),
+        &long_sparse[..],
+    ];
+    for archive in archives {
+        let expected = read_entries(archive).await;
+        let reader = PendingReader {
+            data: archive,
+            is_pending: false,
+        };
+        assert_eq!(read_entries(reader).await, expected);
+    }
+    assert_eq!(read_entries(&long_sparse[..]).await[0].0, name.as_bytes());
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn entries_end_after_an_error() {
+    let tar = &tar!("reading_files.tar")[..600];
+
+    let mut entries = t!(Archive::new(tar).entries());
+    assert!(entries.next().await.unwrap().is_ok());
+    assert!(entries.next().await.unwrap().is_err());
+    assert!(entries.next().await.is_none());
+
+    let mut raw = t!(Archive::new(tar).entries_raw());
+    assert!(raw.next().await.unwrap().is_ok());
+    assert!(raw.next().await.unwrap().is_err());
+    assert!(raw.next().await.is_none());
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn ustar_with_nul_version_reads_prefix() {
+    let path = format!("{}/{}", "p".repeat(60), "n".repeat(60));
+    let mut header = Header::new_ustar();
+    t!(header.set_path(&path));
+    header.set_size(0);
+    header.as_mut_bytes()[263..265].copy_from_slice(b"\0\0");
+    header.set_cksum();
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, header.as_bytes());
+    tar.extend(repeat(0u8).take(BLOCK * 2));
+
+    let entries = read_entries(&tar[..]).await;
+    assert_eq!(entries[0].0, path.as_bytes());
+}
+
+fn dataless_member(typeflag: u8, size: u64, pax_size: Option<u64>) -> Vec<u8> {
+    let mut tar = Vec::new();
+    if let Some(pax_size) = pax_size {
+        let recs = pax_record("size", &pax_size.to_string());
+        let mut x = Header::new_ustar();
+        t!(x.set_path("PaxHeaders/0"));
+        x.set_entry_type(EntryType::new(b'x'));
+        x.set_size(recs.len() as u64);
+        x.set_cksum();
+        push_block(&mut tar, x.as_bytes());
+        push_block(&mut tar, &recs);
+    }
+
+    let mut member = Header::new_ustar();
+    t!(member.set_path("member"));
+    member.set_entry_type(EntryType::new(typeflag));
+    if typeflag == b'1' || typeflag == b'2' {
+        t!(member.set_link_name("target"));
+    }
+    member.set_size(size);
+    member.set_cksum();
+    push_block(&mut tar, member.as_bytes());
+
+    let mut next = Header::new_ustar();
+    t!(next.set_path("next"));
+    next.set_size(0);
+    next.set_cksum();
+    push_block(&mut tar, next.as_bytes());
+    tar.extend(repeat(0u8).take(BLOCK * 2));
+    tar
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn size_on_entry_without_data_is_rejected() {
+    let cases = [
+        (b'5', 512, None),
+        (b'1', 512, None),
+        (b'5', 0, Some(512)),
+        (b'1', 0, Some(512)),
+        (b'2', 0, Some(512)),
+    ];
+    for (typeflag, size, pax_size) in cases {
+        let tar = dataless_member(typeflag, size, pax_size);
+        let mut entries = t!(Archive::new(&tar[..]).entries());
+        let first = entries.next().await.unwrap();
+        assert!(first.is_err(), "typeflag {}", typeflag as char);
+    }
+
+    let tar = dataless_member(b'5', 0, Some(0));
+    assert_eq!(read_entries(&tar[..]).await.len(), 2);
+}
+
+fn push_pax(tar: &mut Vec<u8>, records: &[u8]) {
+    let mut x = Header::new_ustar();
+    t!(x.set_path("PaxHeaders/0"));
+    x.set_entry_type(EntryType::new(b'x'));
+    x.set_size(records.len() as u64);
+    x.set_cksum();
+    push_block(tar, x.as_bytes());
+    push_block(tar, records);
+}
+
+fn push_gnu_long(tar: &mut Vec<u8>, typeflag: u8, name: &str) {
+    let mut long = Header::new_gnu();
+    t!(long.set_path("././@LongLink"));
+    long.set_entry_type(EntryType::new(typeflag));
+    long.set_size(name.len() as u64 + 1);
+    long.set_cksum();
+    push_block(tar, long.as_bytes());
+    push_block(tar, format!("{name}\0").as_bytes());
+}
+
+fn push_member(tar: &mut Vec<u8>, entry_type: EntryType) {
+    let mut member = Header::new_gnu();
+    t!(member.set_path("from-header"));
+    member.set_entry_type(entry_type);
+    if entry_type == EntryType::Symlink {
+        t!(member.set_link_name("from-header"));
+    }
+    member.set_size(0);
+    member.set_cksum();
+    push_block(tar, member.as_bytes());
+    tar.extend(repeat(0u8).take(BLOCK * 2));
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn mixed_pax_and_gnu_names_are_rejected() {
+    let mut pax_then_gnu = Vec::new();
+    push_pax(&mut pax_then_gnu, &pax_record("path", "from-pax"));
+    push_gnu_long(&mut pax_then_gnu, b'L', "from-gnu");
+    push_member(&mut pax_then_gnu, EntryType::Regular);
+
+    let mut gnu_then_pax = Vec::new();
+    push_gnu_long(&mut gnu_then_pax, b'L', "from-gnu");
+    push_pax(&mut gnu_then_pax, &pax_record("path", "from-pax"));
+    push_member(&mut gnu_then_pax, EntryType::Regular);
+
+    let mut links = Vec::new();
+    push_pax(&mut links, &pax_record("linkpath", "from-pax"));
+    push_gnu_long(&mut links, b'K', "from-gnu");
+    push_member(&mut links, EntryType::Symlink);
+
+    for tar in [pax_then_gnu, gnu_then_pax, links] {
+        let mut entries = t!(Archive::new(&tar[..]).entries());
+        assert!(entries.next().await.unwrap().is_err());
+    }
+
+    let mut gnu_and_mtime = Vec::new();
+    push_gnu_long(&mut gnu_and_mtime, b'L', "from-gnu");
+    push_pax(&mut gnu_and_mtime, &pax_record("mtime", "1"));
+    push_member(&mut gnu_and_mtime, EntryType::Regular);
+    assert_eq!(read_entries(&gnu_and_mtime[..]).await[0].0, b"from-gnu");
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pax_global_header_before_member_is_rejected() {
+    let comment = pax_record("comment", "global");
+    let mut global = Header::new_ustar();
+    t!(global.set_path("GlobalHead"));
+    global.set_entry_type(EntryType::new(b'g'));
+    global.set_size(comment.len() as u64);
+    global.set_cksum();
+
+    let mut tar = Vec::new();
+    push_pax(&mut tar, &pax_record("path", "from-pax"));
+    push_block(&mut tar, global.as_bytes());
+    push_block(&mut tar, &comment);
+    push_member(&mut tar, EntryType::Regular);
+
+    let mut entries = t!(Archive::new(&tar[..]).entries());
+    assert!(entries.next().await.unwrap().is_err());
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, global.as_bytes());
+    push_block(&mut tar, &comment);
+    push_pax(&mut tar, &pax_record("path", "from-pax"));
+    push_member(&mut tar, EntryType::Regular);
+    let names: Vec<_> = read_entries(&tar[..])
+        .await
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect();
+    assert_eq!(names, [&b"GlobalHead"[..], b"from-pax"]);
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn unread_extension_headers_are_rejected() {
+    let records = pax_record("path", "renamed");
+    let mut without_magic = Header::new_old();
+    t!(without_magic.set_path("PaxHeader"));
+    without_magic.set_entry_type(EntryType::new(b'x'));
+    without_magic.set_size(records.len() as u64);
+    without_magic.set_cksum();
+
+    let mut solaris = Header::new_ustar();
+    t!(solaris.set_path("PaxHeader"));
+    solaris.set_entry_type(EntryType::new(b'X'));
+    solaris.set_size(records.len() as u64);
+    solaris.set_cksum();
+
+    for header in [without_magic, solaris] {
+        let mut tar = Vec::new();
+        push_block(&mut tar, header.as_bytes());
+        push_block(&mut tar, &records);
+        push_member(&mut tar, EntryType::Regular);
+
+        let mut entries = t!(Archive::new(&tar[..]).entries());
+        assert!(entries.next().await.unwrap().is_err());
+    }
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn gnu_sparse_pax_records_are_rejected() {
+    let mut name_only = pax_record("path", "path-name");
+    name_only.extend(pax_record("GNU.sparse.name", "sparse-name"));
+    let mut sparse_1_0 = pax_record("GNU.sparse.major", "1");
+    sparse_1_0.extend(pax_record("GNU.sparse.minor", "0"));
+
+    for records in [name_only, sparse_1_0] {
+        let mut tar = Vec::new();
+        push_pax(&mut tar, &records);
+        push_member(&mut tar, EntryType::Regular);
+
+        let mut entries = t!(Archive::new(&tar[..]).entries());
+        assert!(entries.next().await.unwrap().is_err());
+    }
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn empty_pax_path_is_rejected() {
+    for (key, entry_type) in [
+        ("path", EntryType::Regular),
+        ("linkpath", EntryType::Symlink),
+    ] {
+        let mut tar = Vec::new();
+        push_pax(&mut tar, &pax_record(key, ""));
+        push_member(&mut tar, entry_type);
+
+        let mut entries = t!(Archive::new(&tar[..]).entries());
+        assert!(entries.next().await.unwrap().is_err(), "{key}");
+    }
+
+    let mut records = pax_record("path", "");
+    records.extend(pax_record("path", "from-pax"));
+    let mut tar = Vec::new();
+    push_pax(&mut tar, &records);
+    push_member(&mut tar, EntryType::Regular);
+    assert_eq!(read_entries(&tar[..]).await[0].0, b"from-pax");
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn gnu_volume_label_is_not_unpacked() {
+    let mut label = Header::new_gnu();
+    t!(label.set_path("label"));
+    label.set_entry_type(EntryType::new(b'V'));
+    label.set_size(0);
+    label.set_cksum();
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, label.as_bytes());
+    push_member(&mut tar, EntryType::Regular);
+
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
+    t!(Archive::new(&tar[..]).unpack(td.path()).await);
+    assert!(td.path().join("from-header").exists());
+    assert!(!td.path().join("label").exists());
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn malformed_pax_records_are_rejected() {
+    let mut blank_line = pax_record("comment", "x");
+    blank_line.push(b'\n');
+    blank_line.extend(pax_record("path", "renamed"));
+    let cases = [
+        b"15 path=renamed\n".to_vec(),
+        b"+16 path=renamed\n".to_vec(),
+        blank_line,
+    ];
+    for records in cases {
+        let mut tar = Vec::new();
+        push_pax(&mut tar, &records);
+        push_member(&mut tar, EntryType::Regular);
+
+        let mut entries = t!(Archive::new(&tar[..]).entries());
+        assert!(entries.next().await.unwrap().is_err());
+    }
+}

@@ -1,7 +1,7 @@
 #[cfg(feature = "runtime-tokio")]
 use std::path::Path;
 use std::{
-    cmp,
+    cmp, mem,
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll},
@@ -24,7 +24,7 @@ use tokio::{
 use tokio_stream::{Stream, StreamExt};
 
 use crate::{
-    Entry, GnuExtSparseHeader, GnuSparseHeader, Header,
+    Entry, EntryType, GnuExtSparseHeader, GnuSparseHeader, Header,
     entry::{EntryFields, EntryIo},
     error::TarError,
     fs_canonicalize, other,
@@ -170,7 +170,7 @@ impl<R: Read + Unpin> Archive<R> {
     /// Note that care must be taken to consider each entry within an archive in
     /// sequence. If entries are processed out of sequence (from what the
     /// stream returns), then the contents read for each entry may be
-    /// corrupted.
+    /// corrupted. The stream ends after its first error.
     pub fn entries(self) -> io::Result<Entries<R>> {
         if self.inner.lock().unwrap().pos != 0 {
             return Err(other(
@@ -183,9 +183,11 @@ impl<R: Read + Unpin> Archive<R> {
             archive: self,
             current: State::default(),
             fields: None,
+            extension_body: Vec::new(),
             gnu_longlink: None,
             gnu_longname: None,
             pax_extensions: None,
+            is_done: false,
         })
     }
 
@@ -194,7 +196,7 @@ impl<R: Read + Unpin> Archive<R> {
     /// Note that care must be taken to consider each entry within an archive in
     /// sequence. If entries are processed out of sequence (from what the
     /// stream returns), then the contents read for each entry may be
-    /// corrupted.
+    /// corrupted. The stream ends after its first error.
     pub fn entries_raw(self) -> io::Result<RawEntries<R>> {
         if self.inner.lock().unwrap().pos != 0 {
             return Err(other(
@@ -206,6 +208,7 @@ impl<R: Read + Unpin> Archive<R> {
         Ok(RawEntries {
             archive: self,
             current: (0, None, 0),
+            is_done: false,
         })
     }
 
@@ -280,6 +283,7 @@ struct State {
     current_header: Option<Header>,
     current_header_pos: usize,
     current_ext: Option<GnuExtSparseHeader>,
+    ext_headers: Vec<GnuExtSparseHeader>,
     pax_extensions: Option<Vec<u8>>,
 }
 
@@ -289,9 +293,12 @@ pub struct Entries<R: Read + Unpin> {
     archive: Archive<R>,
     current: State,
     fields: Option<EntryFields<Archive<R>>>,
+    // Keeps the bytes of an extension body read before a Pending read.
+    extension_body: Vec<u8>,
     gnu_longname: Option<Vec<u8>>,
     gnu_longlink: Option<Vec<u8>>,
     pax_extensions: Option<Vec<u8>>,
+    is_done: bool,
 }
 
 macro_rules! ready_opt_err {
@@ -313,14 +320,16 @@ macro_rules! ready_err {
     };
 }
 
-impl<R: Read + Unpin> Stream for Entries<R> {
-    type Item = io::Result<Entry<Archive<R>>>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+impl<R: Read + Unpin> Entries<R> {
+    fn poll_next_entry(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<io::Result<Entry<Archive<R>>>>> {
         loop {
             let Self {
                 current,
                 fields,
+                extension_body,
                 gnu_longname,
                 gnu_longlink,
                 archive,
@@ -351,6 +360,24 @@ impl<R: Read + Unpin> Stream for Entries<R> {
 
             let is_recognized_header =
                 new_fields.header.as_gnu().is_some() || new_fields.header.as_ustar().is_some();
+
+            // GNU tar, bsdtar and Python read these headers as extensions.
+            let entry_type = new_fields.header.entry_type();
+            let is_extension = entry_type.is_gnu_longname()
+                || entry_type.is_gnu_longlink()
+                || entry_type.is_pax_local_extensions()
+                || entry_type.is_pax_global_extensions();
+            if is_extension && !is_recognized_header {
+                return Poll::Ready(Some(Err(other(
+                    "an extension header without ustar or GNU magic",
+                ))));
+            }
+            if entry_type.as_byte() == b'X' {
+                return Poll::Ready(Some(Err(other(
+                    "Solaris extended headers are not supported",
+                ))));
+            }
+
             if is_recognized_header && new_fields.header.entry_type().is_gnu_longname() {
                 if gnu_longname.is_some() {
                     return Poll::Ready(Some(Err(other(
@@ -359,7 +386,8 @@ impl<R: Read + Unpin> Stream for Entries<R> {
                     ))));
                 }
 
-                *gnu_longname = Some(ready_err!(Pin::new(new_fields).poll_read_all(cx)));
+                ready_err!(Pin::new(new_fields).poll_read_all(cx, extension_body));
+                *gnu_longname = Some(mem::take(extension_body));
                 *fields = None;
                 continue;
             }
@@ -371,7 +399,8 @@ impl<R: Read + Unpin> Stream for Entries<R> {
                          the same member",
                     ))));
                 }
-                *gnu_longlink = Some(ready_err!(Pin::new(new_fields).poll_read_all(cx)));
+                ready_err!(Pin::new(new_fields).poll_read_all(cx, extension_body));
+                *gnu_longlink = Some(mem::take(extension_body));
                 *fields = None;
                 continue;
             }
@@ -383,23 +412,61 @@ impl<R: Read + Unpin> Stream for Entries<R> {
                          the same member",
                     ))));
                 }
-                *pax_extensions = Some(ready_err!(Pin::new(new_fields).poll_read_all(cx)));
+                ready_err!(Pin::new(new_fields).poll_read_all(cx, extension_body));
+                *pax_extensions = Some(mem::take(extension_body));
                 *current_pax_extensions = pax_extensions.clone();
                 *fields = None;
                 continue;
             }
 
-            new_fields.long_pathname = gnu_longname.take();
-            new_fields.long_linkname = gnu_longlink.take();
-            new_fields.pax_extensions = pax_extensions.take();
+            let is_extension_pending =
+                gnu_longname.is_some() || gnu_longlink.is_some() || pax_extensions.is_some();
+            if is_extension_pending && new_fields.header.entry_type().is_pax_global_extensions() {
+                return Poll::Ready(Some(Err(other(
+                    "a pax global header between an extension header and its member",
+                ))));
+            }
+
+            // A Pending sparse header runs this again, so it keeps what an earlier pass moved.
+            if gnu_longname.is_some() {
+                new_fields.long_pathname = gnu_longname.take();
+            }
+            if gnu_longlink.is_some() {
+                new_fields.long_linkname = gnu_longlink.take();
+            }
+            if pax_extensions.is_some() {
+                new_fields.pax_extensions = pax_extensions.take();
+            }
             // these pax records apply to this entry only; clear the sizing copy
             // so it doesn't leak onto the next entry
             *current_pax_extensions = None;
+
+            // GNU tar, bsdtar and Python disagree on which of the two names wins.
+            if new_fields.long_pathname.is_some() && new_fields.pax_value(b"path").is_some() {
+                return Poll::Ready(Some(Err(other(
+                    "a GNU long name and a pax path describe the same member",
+                ))));
+            }
+            if new_fields.long_linkname.is_some() && new_fields.pax_value(b"linkpath").is_some() {
+                return Poll::Ready(Some(Err(other(
+                    "a GNU long link and a pax linkpath describe the same member",
+                ))));
+            }
+
+            // POSIX makes an empty value delete the header's name, leaving none.
+            if new_fields.pax_value(b"path").is_some_and(<[u8]>::is_empty)
+                || new_fields
+                    .pax_value(b"linkpath")
+                    .is_some_and(<[u8]>::is_empty)
+            {
+                return Poll::Ready(Some(Err(other("an empty pax path or linkpath"))));
+            }
 
             let State {
                 next,
                 current_header_pos,
                 current_ext,
+                ext_headers,
                 ..
             } = current;
             ready_err!(poll_parse_sparse_header(
@@ -407,6 +474,7 @@ impl<R: Read + Unpin> Stream for Entries<R> {
                 next,
                 current_ext,
                 current_header_pos,
+                ext_headers,
                 new_fields,
                 cx
             ));
@@ -416,19 +484,45 @@ impl<R: Read + Unpin> Stream for Entries<R> {
     }
 }
 
+impl<R: Read + Unpin> Stream for Entries<R> {
+    type Item = io::Result<Entry<Archive<R>>>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.is_done {
+            return Poll::Ready(None);
+        }
+        let item = ready!(self.as_mut().poll_next_entry(cx));
+        self.is_done = !matches!(item, Some(Ok(_)));
+        Poll::Ready(item)
+    }
+}
+
 /// Stream of raw `Entry`s.
 pub struct RawEntries<R: Read + Unpin> {
     archive: Archive<R>,
     current: (u64, Option<Header>, usize),
+    is_done: bool,
 }
 
 impl<R: Read + Unpin> Stream for RawEntries<R> {
     type Item = io::Result<Entry<Archive<R>>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.is_done {
+            return Poll::Ready(None);
+        }
         let archive = self.archive.clone();
         let (next, current_header, current_header_pos) = &mut self.current;
-        poll_next_raw(&archive, next, current_header, current_header_pos, None, cx)
+        let item = ready!(poll_next_raw(
+            &archive,
+            next,
+            current_header,
+            current_header_pos,
+            None,
+            cx
+        ));
+        self.is_done = !matches!(item, Some(Ok(_)));
+        Poll::Ready(item)
     }
 }
 
@@ -524,6 +618,11 @@ fn poll_next_raw<R: Read + Unpin>(
         for extension in pax {
             let extension = extension.map_err(|_e| other("pax extensions invalid"))?;
 
+            // GNU tar and bsdtar expand these into another name and contents.
+            if extension.key_bytes().starts_with(b"GNU.sparse.") {
+                return Poll::Ready(Some(Err(other("GNU sparse pax records are not supported"))));
+            }
+
             // ignore keys that aren't parsable as a string at this stage.
             // that isn't relevant to the size/uid/gid processing.
             let Some(key) = extension.key().ok() else {
@@ -569,6 +668,23 @@ fn poll_next_raw<R: Read + Unpin>(
         }
     }
 
+    // POSIX stores no data for these types, and readers disagree on what a size
+    // on them means.
+    let is_dataless = matches!(
+        entry_type,
+        EntryType::Link
+            | EntryType::Symlink
+            | EntryType::Char
+            | EntryType::Block
+            | EntryType::Directory
+            | EntryType::Fifo
+    );
+    if is_dataless && size != 0 {
+        return Poll::Ready(Some(Err(other(
+            "archive header has a size on an entry type without data",
+        ))));
+    }
+
     let data = EntryIo::Data(archive.clone().take(size));
 
     let ArchiveInner {
@@ -606,6 +722,7 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
     next: &mut u64,
     current_ext: &mut Option<GnuExtSparseHeader>,
     current_ext_pos: &mut usize,
+    ext_headers: &mut Vec<GnuExtSparseHeader>,
     entry: &mut EntryFields<Archive<R>>,
     cx: &mut Context<'_>,
 ) -> Poll<io::Result<()>> {
@@ -637,7 +754,32 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
     // the same as the current offset (described by the list of blocks) as
     // well as the amount of data read equals the size of the entry
     // (`Header::entry_size`).
-    entry.data.truncate(0);
+    //
+    // Every extension header is read before any block is added, so a Pending
+    // read resumes the headers without dropping the blocks of earlier ones.
+    while ext_headers
+        .last()
+        .map_or(gnu.is_extended(), |ext| ext.is_extended())
+    {
+        if current_ext.is_none() {
+            *current_ext_pos = 0;
+        }
+        let ext = current_ext.get_or_insert_with(GnuExtSparseHeader::new);
+        match ready!(poll_try_read_all(
+            archive.clone(),
+            cx,
+            ext.as_mut_bytes(),
+            current_ext_pos,
+        )) {
+            Ok(true) => {}
+            Ok(false) => return Poll::Ready(Err(other("failed to read extension"))),
+            Err(err) => return Poll::Ready(Err(err)),
+        }
+        *next += 512;
+        ext_headers.extend(current_ext.take());
+    }
+    let ext_headers = mem::take(ext_headers);
+    entry.data.clear();
 
     let mut cur = 0;
     let mut remaining = entry.size;
@@ -678,36 +820,9 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
             data.push(EntryIo::Data(reader.clone().take(len)));
             Ok(())
         };
-        for block in &gnu.sparse {
+        let ext_blocks = ext_headers.iter().flat_map(|ext| &ext.sparse);
+        for block in gnu.sparse.iter().chain(ext_blocks) {
             add_block(block)?
-        }
-        if gnu.is_extended() {
-            let started_header = current_ext.is_some();
-            if !started_header {
-                let mut ext = GnuExtSparseHeader::new();
-                ext.isextended[0] = 1;
-                *current_ext = Some(ext);
-                *current_ext_pos = 0;
-            }
-
-            let ext = current_ext.as_mut().unwrap();
-            while ext.is_extended() {
-                match ready!(poll_try_read_all(
-                    archive.clone(),
-                    cx,
-                    ext.as_mut_bytes(),
-                    current_ext_pos,
-                )) {
-                    Ok(true) => {}
-                    Ok(false) => return Poll::Ready(Err(other("failed to read extension"))),
-                    Err(err) => return Poll::Ready(Err(err)),
-                }
-
-                *next += 512;
-                for block in &ext.sparse {
-                    add_block(block)?;
-                }
-            }
         }
     }
     if cur != gnu.real_size()? {

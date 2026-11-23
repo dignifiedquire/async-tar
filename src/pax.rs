@@ -30,7 +30,7 @@ impl<'entry> Iterator for PaxExtensions<'entry> {
 
     fn next(&mut self) -> Option<io::Result<PaxExtension<'entry>>> {
         while !self.data.is_empty() {
-            if self.data[0] == 0 || self.data[0] == b'\n' {
+            if self.data[0] == 0 {
                 self.data = &self.data[1..];
                 continue;
             }
@@ -51,8 +51,9 @@ impl<'entry> Iterator for PaxExtensions<'entry> {
                 }
             };
 
+            let is_decimal = !len_str.is_empty() && len_str.bytes().all(|b| b.is_ascii_digit());
             let total_len = match len_str.parse::<usize>() {
-                Ok(len) if len > space_idx => len,
+                Ok(len) if is_decimal && len > space_idx => len,
                 _ => {
                     self.data = &[];
                     return Some(Err(other("malformed pax extension: invalid length")));
@@ -67,10 +68,11 @@ impl<'entry> Iterator for PaxExtensions<'entry> {
             let record = &self.data[..total_len];
             self.data = &self.data[total_len..];
 
-            let record_content = if record.ends_with(b"\n") {
-                &record[..record.len() - 1]
-            } else {
-                record
+            let Some(record_content) = record.strip_suffix(b"\n") else {
+                self.data = &[];
+                return Some(Err(other(
+                    "malformed pax extension: no newline at its length",
+                )));
             };
 
             let kv = &record_content[space_idx + 1..];
