@@ -360,6 +360,24 @@ impl<R: Read + Unpin> Entries<R> {
 
             let is_recognized_header =
                 new_fields.header.as_gnu().is_some() || new_fields.header.as_ustar().is_some();
+
+            // GNU tar, bsdtar and Python read these headers as extensions.
+            let entry_type = new_fields.header.entry_type();
+            let is_extension = entry_type.is_gnu_longname()
+                || entry_type.is_gnu_longlink()
+                || entry_type.is_pax_local_extensions()
+                || entry_type.is_pax_global_extensions();
+            if is_extension && !is_recognized_header {
+                return Poll::Ready(Some(Err(other(
+                    "an extension header without ustar or GNU magic",
+                ))));
+            }
+            if entry_type.as_byte() == b'X' {
+                return Poll::Ready(Some(Err(other(
+                    "Solaris extended headers are not supported",
+                ))));
+            }
+
             if is_recognized_header && new_fields.header.entry_type().is_gnu_longname() {
                 if gnu_longname.is_some() {
                     return Poll::Ready(Some(Err(other(

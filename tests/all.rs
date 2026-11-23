@@ -1885,3 +1885,30 @@ async fn pax_global_header_before_member_is_rejected() {
         .collect();
     assert_eq!(names, [&b"GlobalHead"[..], b"from-pax"]);
 }
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn unread_extension_headers_are_rejected() {
+    let records = pax_record("path", "renamed");
+    let mut without_magic = Header::new_old();
+    t!(without_magic.set_path("PaxHeader"));
+    without_magic.set_entry_type(EntryType::new(b'x'));
+    without_magic.set_size(records.len() as u64);
+    without_magic.set_cksum();
+
+    let mut solaris = Header::new_ustar();
+    t!(solaris.set_path("PaxHeader"));
+    solaris.set_entry_type(EntryType::new(b'X'));
+    solaris.set_size(records.len() as u64);
+    solaris.set_cksum();
+
+    for header in [without_magic, solaris] {
+        let mut tar = Vec::new();
+        push_block(&mut tar, header.as_bytes());
+        push_block(&mut tar, &records);
+        push_member(&mut tar, EntryType::Regular);
+
+        let mut entries = t!(Archive::new(&tar[..]).entries());
+        assert!(entries.next().await.unwrap().is_err());
+    }
+}
