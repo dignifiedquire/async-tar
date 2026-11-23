@@ -1997,6 +1997,34 @@ async fn pax_records_with_nul_padding_read() {
     assert_eq!(entries, [(b"padded.txt".to_vec(), b"data".to_vec())]);
 }
 
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn sizes_beyond_i64_max_are_rejected() {
+    for size in [u64::MAX - 510, 1 << 63] {
+        let mut smuggled = Vec::new();
+        push_file(&mut smuggled, "smuggled.txt", b"pwned\n");
+
+        let mut from_pax = Vec::new();
+        push_pax(&mut from_pax, &pax_record("size", &size.to_string()));
+        push_file(&mut from_pax, "carrier.txt", b"");
+
+        let mut from_header = Vec::new();
+        let mut header = Header::new_gnu();
+        t!(header.set_path("carrier.txt"));
+        header.set_size(size);
+        header.set_cksum();
+        push_block(&mut from_header, header.as_bytes());
+
+        for mut tar in [from_pax, from_header] {
+            tar.extend(&smuggled);
+            tar.extend(repeat_n(0u8, BLOCK * 2));
+            let mut entries = t!(Archive::new(&tar[..]).entries());
+            assert!(entries.next().await.unwrap().is_err());
+            assert!(entries.next().await.is_none());
+        }
+    }
+}
+
 async fn is_rejected(tar: &[u8]) -> bool {
     let mut entries = t!(Archive::new(tar).entries());
     while let Some(entry) = entries.next().await {

@@ -759,6 +759,11 @@ fn poll_next_raw<R: Read + Unpin>(
         ))));
     }
 
+    // Sizes beyond i64::MAX are refused, since file offsets are signed 64-bit.
+    if i64::try_from(size).is_err() {
+        return Poll::Ready(Some(Err(other("archive header size is out of range"))));
+    }
+
     let data = EntryIo::Data(archive.clone().take(size));
 
     let ArchiveInner {
@@ -785,8 +790,9 @@ fn poll_next_raw<R: Read + Unpin>(
 
     // Store where the next entry is, rounding up by 512 bytes (the size of
     // a header);
-    let size = (size + 511) & !(512 - 1);
-    *next += size;
+    *next = next
+        .checked_add(size.next_multiple_of(512))
+        .ok_or_else(|| other("archive header size is out of range"))?;
 
     Poll::Ready(Some(Ok(ret.into_entry())))
 }
