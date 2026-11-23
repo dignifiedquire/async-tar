@@ -76,7 +76,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - run: cargo fmt --all -- --check
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-make
+      - run: cargo make format-check
 
   lint_tokio:
     name: Clippy tokio
@@ -86,7 +89,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - run: cargo clippy --all-targets --no-default-features --features runtime-tokio -- -D warnings
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-make
+      - run: cargo make clippy-tokio
 
   lint_smol:
     name: Clippy smol
@@ -96,7 +102,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - run: cargo clippy --all-targets --no-default-features --features runtime-smol -- -D warnings
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-make
+      - run: cargo make clippy-smol
 
   check_android:
     name: Check Android

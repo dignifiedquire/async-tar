@@ -1,6 +1,6 @@
-use std::path::Path;
 use std::{
     cmp, mem,
+    path::Path,
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll},
@@ -58,6 +58,7 @@ pub struct ArchiveInner<R: Read + Unpin> {
 }
 
 /// Configure the archive.
+#[derive(Debug)]
 pub struct ArchiveBuilder<R: Read + Unpin> {
     obj: R,
     unpack_xattrs: bool,
@@ -223,7 +224,6 @@ impl<R: Read + Unpin> Archive<R> {
     /// a '..' in their path are skipped during the unpacking process.
     ///
     /// # Examples
-    ///
     #[cfg_attr(feature = "runtime-smol", doc = "```no_run")]
     #[cfg_attr(feature = "runtime-tokio", doc = "```ignore")]
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> { smol::block_on(async {
@@ -567,6 +567,7 @@ impl<R: Read + Unpin> Stream for Entries<R> {
 }
 
 /// Stream of raw `Entry`s.
+#[derive(Debug)]
 pub struct RawEntries<R: Read + Unpin> {
     archive: Archive<R>,
     current: (u64, Option<Header>, usize),

@@ -4,19 +4,18 @@
 //! name as the first argument provided, and then prints the contents of that
 //! file to stdout.
 
+use std::{env::args_os, path::Path};
+
+use async_tar::Archive;
 #[cfg(feature = "runtime-smol")]
 use smol::{
     io::{AsyncWriteExt, copy},
     stream::StreamExt,
 };
-use std::env::args_os;
-use std::path::Path;
 #[cfg(feature = "runtime-tokio")]
 use tokio::io::{AsyncWriteExt, copy, stdin, stdout};
 #[cfg(feature = "runtime-tokio")]
 use tokio_stream::StreamExt;
-
-use async_tar::Archive;
 
 #[cfg(feature = "runtime-smol")]
 fn stdin() -> smol::Unblock<std::io::Stdin> {

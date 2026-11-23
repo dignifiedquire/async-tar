@@ -11,11 +11,13 @@ use crate::other;
 ///
 /// This iterator yields structures which can themselves be parsed into
 /// key/value pairs.
+#[derive(Debug)]
 pub struct PaxExtensions<'entry> {
     data: &'entry [u8],
 }
 
 /// A key/value pair corresponding to a pax extension.
+#[derive(Debug)]
 pub struct PaxExtension<'entry> {
     key: &'entry [u8],
     value: &'entry [u8],

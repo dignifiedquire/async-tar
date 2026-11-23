@@ -1,10 +1,12 @@
+//! Tests for unpacking links, permissions and paths.
+
 #[cfg(feature = "runtime-smol")]
 use smol::{
     fs::{self, File},
     io::AsyncReadExt,
     stream::StreamExt,
 };
-
+use tempfile::Builder;
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
     fs::{self, File},
@@ -12,8 +14,6 @@ use tokio::{
 };
 #[cfg(feature = "runtime-tokio")]
 use tokio_stream::StreamExt;
-
-use tempfile::Builder;
 
 macro_rules! t {
     ($e:expr) => {

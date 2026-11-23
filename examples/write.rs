@@ -1,3 +1,5 @@
+//! An example of writing an archive from files on disk.
+
 use async_tar::Builder;
 #[cfg(feature = "runtime-smol")]
 use smol::fs::File;

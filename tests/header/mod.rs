@@ -8,9 +8,8 @@ use std::{
     thread, time,
 };
 
-use tempfile::Builder;
-
 use async_tar::{GnuHeader, Header, HeaderMode};
+use tempfile::Builder;
 
 #[test]
 fn default_gnu() {

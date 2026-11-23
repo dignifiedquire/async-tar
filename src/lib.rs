@@ -17,9 +17,6 @@
 //     implementations are all found in this crate and the generic functions are
 //     all just super thin wrappers (e.g. easy to codegen).
 
-#![deny(missing_docs)]
-#![deny(clippy::all)]
-
 #[cfg(all(feature = "runtime-smol", feature = "runtime-tokio"))]
 compile_error!(
     "Features `runtime-smol` and `runtime-tokio` are mutually exclusive. Please enable only one."
