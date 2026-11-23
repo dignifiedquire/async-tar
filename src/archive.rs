@@ -1,5 +1,7 @@
 use std::{
-    cmp, mem,
+    cmp,
+    collections::VecDeque,
+    mem,
     path::Path,
     pin::Pin,
     sync::{Arc, Mutex},
@@ -791,7 +793,7 @@ fn poll_next_raw<R: Read + Unpin>(
         size,
         header_pos,
         file_pos,
-        data: vec![data],
+        data: VecDeque::from([data]),
         header,
         long_pathname: None,
         long_linkname: None,
@@ -911,7 +913,7 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
                 ));
             } else if cur < off {
                 let block = io::repeat(0).take((off - cur) as _);
-                data.push(EntryIo::Pad(block));
+                data.push_back(EntryIo::Pad(block));
             }
             cur = off
                 .checked_add(len)
@@ -922,7 +924,7 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
                      listed",
                 )
             })?;
-            data.push(EntryIo::Data(reader.clone().take(len)));
+            data.push_back(EntryIo::Data(reader.clone().take(len)));
             Ok(())
         };
         let ext_blocks = ext_headers.iter().flat_map(|ext| &ext.sparse);

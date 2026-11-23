@@ -2,7 +2,9 @@
 use std::fs::Permissions;
 use std::{
     borrow::Cow,
-    cmp, fmt, marker,
+    cmp,
+    collections::VecDeque,
+    fmt, marker,
     path::{Component, Path, PathBuf},
     pin::Pin,
     task::{Context, Poll},
@@ -56,7 +58,7 @@ pub struct EntryFields<R: Read + Unpin> {
     pub size: u64,
     pub header_pos: u64,
     pub file_pos: u64,
-    pub data: Vec<EntryIo<R>>,
+    pub data: VecDeque<EntryIo<R>>,
     pub unpack_xattrs: bool,
     pub preserve_permissions: bool,
     pub preserve_mtime: bool,
@@ -926,11 +928,7 @@ impl<R: Read + Unpin> Read for EntryFields<R> {
     ) -> Poll<io::Result<usize>> {
         loop {
             if self.read_state.is_none() {
-                if self.data.is_empty() {
-                    self.read_state = None;
-                } else {
-                    self.read_state = Some(self.data.remove(0));
-                }
+                self.read_state = self.data.pop_front();
             }
 
             if let Some(io) = &mut self.read_state {
@@ -969,11 +967,7 @@ impl<R: Read + Unpin> Read for EntryFields<R> {
     ) -> Poll<io::Result<()>> {
         loop {
             if self.read_state.is_none() {
-                if self.data.is_empty() {
-                    self.read_state = None;
-                } else {
-                    self.read_state = Some(self.data.remove(0));
-                }
+                self.read_state = self.data.pop_front();
             }
 
             if let Some(io) = &mut self.read_state {
