@@ -1319,10 +1319,9 @@ fn pax_record(key: &str, value: &str) -> Vec<u8> {
 
 /// Regression test for GHSA-35rm-7j9c-2f7m (PAX extension-header desync).
 ///
-/// A buffered PAX `size` applies to the next file entry, not an intervening
-/// extension header. Mis-applying it to a GNU longname (`L`) reads the longname
-/// body with the wrong length and desyncs the parse, so an `x -> L -> file`
-/// stream can smuggle content past a POSIX-correct parser like GNU tar.
+/// A PAX `size` applied to a GNU longname (`L`) desynced the parse, so an
+/// `x -> L -> file` stream smuggled a member past GNU tar. Such a mix is now
+/// rejected, so the smuggled member never surfaces.
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn pax_size_not_applied_to_intermediary_longname() {
@@ -1369,59 +1368,15 @@ async fn pax_size_not_applied_to_intermediary_longname() {
     push_block(&mut tar, smuggled_body); // B6
     tar.extend(repeat(0u8).take(BLOCK * 2)); // EOF
 
-    // stream view: the surfaced entry must converge with GNU tar.
-    let ar = Archive::new(&tar[..]);
-    let mut entries = t!(ar.entries());
-
-    let mut first = t!(entries.next().await.unwrap());
-    let mut body = Vec::new();
-    t!(first.read_to_end(&mut body).await);
-
-    // a correct parser reads B5 (opaque) as this entry's data; a desynced one
-    // reads B6, the smuggled script.
-    assert!(
-        body.starts_with(b"hidden_payload.sh"),
-        "PAX size mis-applied to intermediary `L` header: entry data desynced \
-         (prefix {:?})",
-        String::from_utf8_lossy(&body[..body.len().min(16)]),
-    );
-    assert!(
-        !body.starts_with(b"#!/bin/sh"),
-        "smuggled executable payload was materialized as entry data",
-    );
-    assert_eq!(&*first.path_bytes(), b"GNU_SEES_THIS.txt");
-    assert!(
-        entries.next().await.is_none(),
-        "unexpected extra entry surfaced"
-    );
-
-    // on-disk view: GNU tar writes one file, GNU_SEES_THIS.txt, holding the
-    // opaque bytes B5+B6, and never writes hidden_payload.sh. async-tar must match.
-    let mut expected = Vec::new();
-    push_block(&mut expected, smuggled.as_bytes()); // B5
-    push_block(&mut expected, smuggled_body); // B6
+    let mut entries = t!(Archive::new(&tar[..]).entries());
+    while let Some(Ok(entry)) = entries.next().await {
+        assert_ne!(&*entry.path_bytes(), b"hidden_payload.sh");
+    }
+    assert!(is_rejected(&tar).await);
 
     let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
-    t!(Archive::new(&tar[..]).unpack(td.path()).await);
-
-    let extracted = td.path().join("GNU_SEES_THIS.txt");
-    assert!(
-        extracted.exists(),
-        "expected `GNU_SEES_THIS.txt` to be extracted"
-    );
-    let on_disk = t!(fs::read(&extracted).await);
-    assert_eq!(
-        on_disk,
-        expected,
-        "extracted file diverges from a POSIX-correct parser: for identical \
-         archive bytes async-tar wrote different contents than GNU tar (got \
-         prefix {:?})",
-        String::from_utf8_lossy(&on_disk[..on_disk.len().min(16)]),
-    );
-    assert!(
-        !td.path().join("hidden_payload.sh").exists(),
-        "smuggled file `hidden_payload.sh` was written to disk",
-    );
+    assert!(Archive::new(&tar[..]).unpack(td.path()).await.is_err());
+    assert!(!td.path().join("hidden_payload.sh").exists());
 }
 
 /// Regression test for the buffered-PAX state leak, adjacent to
@@ -1824,7 +1779,7 @@ fn push_member(tar: &mut Vec<u8>, entry_type: EntryType) {
 
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
-async fn mixed_pax_and_gnu_names_are_rejected() {
+async fn gnu_and_pax_extensions_on_one_member_are_rejected() {
     let mut pax_then_gnu = Vec::new();
     push_pax(&mut pax_then_gnu, &pax_record("path", "from-pax"));
     push_gnu_long(&mut pax_then_gnu, b'L', "from-gnu");
@@ -1840,16 +1795,25 @@ async fn mixed_pax_and_gnu_names_are_rejected() {
     push_gnu_long(&mut links, b'K', "from-gnu");
     push_member(&mut links, EntryType::Symlink);
 
-    for tar in [pax_then_gnu, gnu_then_pax, links] {
-        let mut entries = t!(Archive::new(&tar[..]).entries());
-        assert!(entries.next().await.unwrap().is_err());
-    }
-
     let mut gnu_and_mtime = Vec::new();
     push_gnu_long(&mut gnu_and_mtime, b'L', "from-gnu");
     push_pax(&mut gnu_and_mtime, &pax_record("mtime", "1"));
     push_member(&mut gnu_and_mtime, EntryType::Regular);
-    assert_eq!(read_entries(&gnu_and_mtime[..]).await[0].0, b"from-gnu");
+
+    let mut size_then_gnu = Vec::new();
+    push_pax(&mut size_then_gnu, &pax_record("size", "512"));
+    push_gnu_long(&mut size_then_gnu, b'L', "from-gnu");
+    push_member(&mut size_then_gnu, EntryType::Regular);
+
+    for tar in [
+        pax_then_gnu,
+        gnu_then_pax,
+        links,
+        gnu_and_mtime,
+        size_then_gnu,
+    ] {
+        assert!(is_rejected(&tar).await);
+    }
 }
 
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
