@@ -1972,3 +1972,24 @@ async fn gnu_volume_label_is_not_unpacked() {
     assert!(td.path().join("from-header").exists());
     assert!(!td.path().join("label").exists());
 }
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn malformed_pax_records_are_rejected() {
+    let mut blank_line = pax_record("comment", "x");
+    blank_line.push(b'\n');
+    blank_line.extend(pax_record("path", "renamed"));
+    let cases = [
+        b"15 path=renamed\n".to_vec(),
+        b"+16 path=renamed\n".to_vec(),
+        blank_line,
+    ];
+    for records in cases {
+        let mut tar = Vec::new();
+        push_pax(&mut tar, &records);
+        push_member(&mut tar, EntryType::Regular);
+
+        let mut entries = t!(Archive::new(&tar[..]).entries());
+        assert!(entries.next().await.unwrap().is_err());
+    }
+}
