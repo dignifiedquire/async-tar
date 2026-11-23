@@ -173,7 +173,7 @@ fn set_ustar_path_hard() {
     let p = Path::new("a").join(vec!["a"; 100].join(""));
     t!(h.set_path(&p));
     let path = t!(h.path());
-    let actual: &Path = path.as_ref().into();
+    let actual: &Path = path.as_ref();
     assert_eq!(actual, p);
 }
 

@@ -1,7 +1,6 @@
-use std::iter::repeat;
+use std::iter::repeat_n;
 
 use async_tar::{Archive, ArchiveBuilder, Builder, EntryType, Header};
-use filetime::FileTime;
 #[cfg(feature = "runtime-smol")]
 use smol::{
     fs::{self, File},
@@ -146,7 +145,7 @@ async fn reading_files() {
 
     let mut b = t!(entries.next().await.unwrap());
     assert_eq!(&*b.header().path_bytes(), b"b");
-    s.truncate(0);
+    s.clear();
     t!(b.read_to_string(&mut s).await);
     assert_eq!(s, "b\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\n");
 
@@ -278,13 +277,13 @@ async fn reading_entries() {
     let mut s = String::new();
     t!(a.read_to_string(&mut s).await);
     assert_eq!(s, "a\na\na\na\na\na\na\na\na\na\na\n");
-    s.truncate(0);
+    s.clear();
     t!(a.read_to_string(&mut s).await);
     assert_eq!(s, "");
     let mut b = t!(entries.next().await.unwrap());
 
     assert_eq!(&*b.header().path_bytes(), b"b");
-    s.truncate(0);
+    s.clear();
     t!(b.read_to_string(&mut s).await);
     assert_eq!(s, "b\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\n");
     assert!(entries.next().await.is_none());
@@ -784,12 +783,9 @@ async fn file_times() {
     t!(ar.unpack(td.path()).await);
 
     let meta = fs::metadata(td.path().join("a")).await.unwrap();
-    let mtime = FileTime::from_last_modification_time(&meta);
-    let atime = FileTime::from_last_access_time(&meta);
-    assert_eq!(mtime.unix_seconds(), 1_000_000_000);
-    assert_eq!(mtime.nanoseconds(), 0);
-    assert_eq!(atime.unix_seconds(), 1_000_000_000);
-    assert_eq!(atime.nanoseconds(), 0);
+    let expected = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+    assert_eq!(t!(meta.modified()), expected);
+    assert_eq!(t!(meta.accessed()), expected);
 }
 
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
@@ -1066,14 +1062,14 @@ async fn extract_sparse() {
     assert_eq!(&s[..5], "test\n");
     assert!(s[5..].chars().all(|x| x == '\u{0}'));
 
-    s.truncate(0);
+    s.clear();
     t!(t!(File::open(td.path().join("sparse_end.txt")).await)
         .read_to_string(&mut s)
         .await);
     assert!(s[..s.len() - 9].chars().all(|x| x == '\u{0}'));
     assert_eq!(&s[s.len() - 9..], "test_end\n");
 
-    s.truncate(0);
+    s.clear();
     t!(t!(File::open(td.path().join("sparse_ext.txt")).await)
         .read_to_string(&mut s)
         .await);
@@ -1090,7 +1086,7 @@ async fn extract_sparse() {
     assert!(s[0x9000 + 5..0xb000].chars().all(|x| x == '\u{0}'));
     assert_eq!(&s[0xb000..0xb000 + 5], "text\n");
 
-    s.truncate(0);
+    s.clear();
     t!(t!(File::open(td.path().join("sparse.txt")).await)
         .read_to_string(&mut s)
         .await);
@@ -1110,8 +1106,8 @@ async fn path_separators() {
     let path = td.path().join("test");
     t!(create_file_with_contents(&path, b"test").await);
 
-    let short_path: PathBuf = repeat("abcd").take(2).collect();
-    let long_path: PathBuf = repeat("abcd").take(50).collect();
+    let short_path: PathBuf = repeat_n("abcd", 2).collect();
+    let long_path: PathBuf = repeat_n("abcd", 50).collect();
 
     // Make sure UStar headers normalize to Unix path separators
     let mut header = Header::new_ustar();
@@ -1301,7 +1297,7 @@ fn push_block(out: &mut Vec<u8>, data: &[u8]) {
     out.extend_from_slice(data);
     let rem = data.len() % BLOCK;
     if rem != 0 {
-        out.extend(repeat(0u8).take(BLOCK - rem));
+        out.extend(repeat_n(0u8, BLOCK - rem));
     }
 }
 
@@ -1365,7 +1361,7 @@ async fn pax_size_not_applied_to_intermediary_longname() {
     push_block(&mut tar, placeholder.as_bytes()); // B4
     push_block(&mut tar, smuggled.as_bytes()); // B5
     push_block(&mut tar, smuggled_body); // B6
-    tar.extend(repeat(0u8).take(BLOCK * 2)); // EOF
+    tar.extend(repeat_n(0u8, BLOCK * 2)); // EOF
 
     let mut entries = t!(Archive::new(&tar[..]).entries());
     while let Some(Ok(entry)) = entries.next().await {
@@ -1421,7 +1417,7 @@ async fn pax_size_does_not_leak_to_subsequent_entry() {
     push_block(&mut tar, first_body); // B3
     push_block(&mut tar, second.as_bytes()); // B4
     push_block(&mut tar, second_body); // B5
-    tar.extend(repeat(0u8).take(BLOCK * 2)); // EOF
+    tar.extend(repeat_n(0u8, BLOCK * 2)); // EOF
 
     let ar = Archive::new(&tar[..]);
     let mut entries = t!(ar.entries());
@@ -1470,7 +1466,7 @@ async fn pax_last_path_wins() {
     push_block(&mut tar, &recs);
     push_block(&mut tar, file.as_bytes());
     push_block(&mut tar, body);
-    tar.extend(repeat(0u8).take(BLOCK * 2));
+    tar.extend(repeat_n(0u8, BLOCK * 2));
 
     let mut entries = t!(Archive::new(&tar[..]).entries());
     let entry = t!(entries.next().await.unwrap());
@@ -1504,7 +1500,7 @@ async fn pax_last_linkpath_wins() {
     push_block(&mut tar, x.as_bytes());
     push_block(&mut tar, &recs);
     push_block(&mut tar, link.as_bytes());
-    tar.extend(repeat(0u8).take(BLOCK * 2));
+    tar.extend(repeat_n(0u8, BLOCK * 2));
 
     let mut entries = t!(Archive::new(&tar[..]).entries());
     let entry = t!(entries.next().await.unwrap());
@@ -1533,7 +1529,7 @@ fn sparse_octal(n: u64) -> [u8; 12] {
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn two_extended_sparse_entries() {
     let mut tar = tar!("sparse.tar")[2048..6144].repeat(2);
-    tar.extend(repeat(0u8).take(BLOCK * 2));
+    tar.extend(repeat_n(0u8, BLOCK * 2));
 
     let entries = read_entries(&tar[..]).await;
     assert_eq!(entries.len(), 2);
@@ -1566,7 +1562,7 @@ async fn sparse_extension_does_not_carry_to_next_entry() {
     push_block(&mut tar, &[0; BLOCK]);
     push_block(&mut tar, &[b'A'; BLOCK]);
     push_block(&mut tar, smuggled.as_bytes());
-    tar.extend(repeat(0u8).take(BLOCK * 2));
+    tar.extend(repeat_n(0u8, BLOCK * 2));
 
     let entries = read_entries(&tar[..]).await;
     let names: Vec<_> = entries.iter().map(|(path, _)| &path[..]).collect();
@@ -1637,7 +1633,7 @@ async fn pending_reads_do_not_change_entries() {
     push_block(&mut long_sparse, long.as_bytes());
     push_block(&mut long_sparse, format!("{name}\0").as_bytes());
     long_sparse.extend_from_slice(&tar!("sparse.tar")[2048..6144]);
-    long_sparse.extend(repeat(0u8).take(BLOCK * 2));
+    long_sparse.extend(repeat_n(0u8, BLOCK * 2));
 
     let archives = [
         tar!("7z_long_path.tar"),
@@ -1684,7 +1680,7 @@ async fn ustar_with_nul_version_reads_prefix() {
 
     let mut tar = Vec::new();
     push_block(&mut tar, header.as_bytes());
-    tar.extend(repeat(0u8).take(BLOCK * 2));
+    tar.extend(repeat_n(0u8, BLOCK * 2));
 
     let entries = read_entries(&tar[..]).await;
     assert_eq!(entries[0].0, path.as_bytes());
@@ -1718,7 +1714,7 @@ fn dataless_member(typeflag: u8, size: u64, pax_size: Option<u64>) -> Vec<u8> {
     next.set_size(0);
     next.set_cksum();
     push_block(&mut tar, next.as_bytes());
-    tar.extend(repeat(0u8).take(BLOCK * 2));
+    tar.extend(repeat_n(0u8, BLOCK * 2));
     tar
 }
 
@@ -1773,7 +1769,7 @@ fn push_member(tar: &mut Vec<u8>, entry_type: EntryType) {
     member.set_size(0);
     member.set_cksum();
     push_block(tar, member.as_bytes());
-    tar.extend(repeat(0u8).take(BLOCK * 2));
+    tar.extend(repeat_n(0u8, BLOCK * 2));
 }
 
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
@@ -1995,7 +1991,7 @@ async fn base256_size_beyond_64_bits_is_rejected() {
         let mut tar = Vec::new();
         push_block(&mut tar, header.as_bytes());
         push_block(&mut tar, &[b'x'; BLOCK]);
-        tar.extend(repeat(0u8).take(BLOCK * 2));
+        tar.extend(repeat_n(0u8, BLOCK * 2));
         tar
     };
 
@@ -2017,7 +2013,7 @@ async fn signed_or_unterminated_size_is_rejected() {
         let mut tar = Vec::new();
         push_block(&mut tar, header.as_bytes());
         push_block(&mut tar, &[b'x'; 10]);
-        tar.extend(repeat(0u8).take(BLOCK * 2));
+        tar.extend(repeat_n(0u8, BLOCK * 2));
         tar
     };
 
@@ -2058,7 +2054,7 @@ async fn unknown_magic_version_is_rejected() {
 
         let mut tar = Vec::new();
         push_block(&mut tar, header.as_bytes());
-        tar.extend(repeat(0u8).take(BLOCK * 2));
+        tar.extend(repeat_n(0u8, BLOCK * 2));
         assert!(is_rejected(&tar).await);
     }
 }
@@ -2066,7 +2062,7 @@ async fn unknown_magic_version_is_rejected() {
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn unknown_entry_types_are_rejected() {
-    for typeflag in [b'Z', b'N', b'D'] {
+    for typeflag in *b"ZND" {
         let mut header = Header::new_gnu();
         t!(header.set_path("unknown"));
         header.set_entry_type(EntryType::new(typeflag));
@@ -2076,7 +2072,7 @@ async fn unknown_entry_types_are_rejected() {
         let mut tar = Vec::new();
         push_block(&mut tar, header.as_bytes());
         push_block(&mut tar, b"hello");
-        tar.extend(repeat(0u8).take(BLOCK * 2));
+        tar.extend(repeat_n(0u8, BLOCK * 2));
         assert!(is_rejected(&tar).await, "{}", typeflag as char);
     }
 }
@@ -2098,7 +2094,7 @@ async fn pax_header_in_v7_archive_is_rejected() {
     let mut tar = Vec::new();
     push_block(&mut tar, v7.as_bytes());
     push_block(&mut tar, v7.as_bytes());
-    tar.extend(repeat(0u8).take(BLOCK * 2));
+    tar.extend(repeat_n(0u8, BLOCK * 2));
     assert_eq!(read_entries(&tar[..]).await.len(), 2);
 }
 
@@ -2181,7 +2177,7 @@ async fn drive_letter_name_is_rejected() {
 
     let mut tar = Vec::new();
     push_block(&mut tar, header.as_bytes());
-    tar.extend(repeat(0u8).take(BLOCK * 2));
+    tar.extend(repeat_n(0u8, BLOCK * 2));
     assert!(is_rejected(&tar).await);
 }
 
@@ -2202,7 +2198,7 @@ async fn link_named_like_directory_is_rejected() {
 
         let mut tar = Vec::new();
         push_block(&mut tar, header.as_bytes());
-        tar.extend(repeat(0u8).take(BLOCK * 2));
+        tar.extend(repeat_n(0u8, BLOCK * 2));
         assert!(is_rejected(&tar).await, "{}", String::from_utf8_lossy(name));
     }
 }
@@ -2218,7 +2214,7 @@ async fn link_target_not_utf8_is_rejected() {
     header.set_size(0);
     header.set_cksum();
     push_block(&mut in_header, header.as_bytes());
-    in_header.extend(repeat(0u8).take(BLOCK * 2));
+    in_header.extend(repeat_n(0u8, BLOCK * 2));
 
     let mut in_pax = Vec::new();
     push_pax(&mut in_pax, b"17 linkpath=caf\xe9\n");

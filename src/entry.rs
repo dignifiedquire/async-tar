@@ -3,6 +3,7 @@ use std::{
     cmp, fmt, marker,
     pin::Pin,
     task::{Context, Poll},
+    time::{Duration, UNIX_EPOCH},
 };
 
 #[cfg(feature = "runtime-smol")]
@@ -21,8 +22,6 @@ use tokio::{
     fs::OpenOptions,
     io::{self, AsyncRead as Read, AsyncReadExt, AsyncSeekExt, Error, ErrorKind, SeekFrom},
 };
-
-use filetime::{self, FileTime};
 
 use crate::{
     Archive, Header, PaxExtensions, error::TarError, fs_canonicalize, header::bytes2path, other,
@@ -715,14 +714,23 @@ impl<R: Read + Unpin> EntryFields<R> {
         })?;
 
         if self.preserve_mtime {
-            if let Ok(mtime) = self.header.mtime() {
-                let mtime = FileTime::from_unix_time(mtime as i64, 0);
-                // The std::fs::set_times replacement is newer than the 1.85 MSRV.
-                #[allow(deprecated)]
-                let result = filetime::set_file_times(dst, mtime, mtime);
-                result.map_err(|e| {
-                    TarError::new(&format!("failed to set mtime for `{}`", dst.display()), e)
-                })?;
+            // An mtime beyond the range of `SystemTime` stays unset.
+            let mtime = self
+                .header
+                .mtime()
+                .ok()
+                .and_then(|mtime| UNIX_EPOCH.checked_add(Duration::from_secs(mtime)));
+            if let Some(mtime) = mtime {
+                let times = std::fs::FileTimes::new()
+                    .set_accessed(mtime)
+                    .set_modified(mtime);
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(dst)
+                    .and_then(|file| file.set_times(times))
+                    .map_err(|e| {
+                        TarError::new(&format!("failed to set mtime for `{}`", dst.display()), e)
+                    })?;
             }
         }
         if let Ok(mode) = self.header.mode() {

@@ -6,6 +6,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+  RUSTDOCFLAGS: -Dwarnings
 
 jobs:
   check_tokio:
@@ -84,7 +86,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - run: cargo clippy --no-default-features --features runtime-tokio -- -D warnings
+      - run: cargo clippy --all-targets --no-default-features --features runtime-tokio -- -D warnings
 
   lint_smol:
     name: Clippy smol
@@ -94,7 +96,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - run: cargo clippy --no-default-features --features runtime-smol -- -D warnings
+      - run: cargo clippy --all-targets --no-default-features --features runtime-smol -- -D warnings
 
   check_android:
     name: Check Android
