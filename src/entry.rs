@@ -444,8 +444,7 @@ impl<R: Read + Unpin> EntryFields<R> {
     }
 
     async fn unpack_in(&mut self, dst: &Path) -> io::Result<bool> {
-        // GNU tar names a global header after its temporary directory. That path
-        // must not appear in `dst` either.
+        // A metadata entry unpacks to no file and makes no directories above its name.
         if self.header.entry_type().is_metadata() {
             return Ok(true);
         }

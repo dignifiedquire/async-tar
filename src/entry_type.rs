@@ -188,7 +188,7 @@ impl EntryType {
         self == EntryType::XHeader
     }
 
-    // Typeflag V is a GNU volume label, the name of the archive.
+    /// Returns whether this type carries only metadata, such as a GNU volume label (V).
     pub(crate) fn is_metadata(self) -> bool {
         self.is_pax_global_extensions()
             || self.is_pax_local_extensions()

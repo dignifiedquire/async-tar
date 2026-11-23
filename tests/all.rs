@@ -1319,9 +1319,8 @@ fn pax_record(key: &str, value: &str) -> Vec<u8> {
 
 /// Regression test for GHSA-35rm-7j9c-2f7m (PAX extension-header desync).
 ///
-/// A PAX `size` applied to a GNU longname (`L`) desynced the parse, so an
-/// `x -> L -> file` stream smuggled a member past GNU tar. Such a mix is now
-/// rejected, so the smuggled member never surfaces.
+/// An `x -> L -> file` stream is rejected, so its smuggled member never surfaces
+/// in the stream or on disk.
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn pax_size_not_applied_to_intermediary_longname() {

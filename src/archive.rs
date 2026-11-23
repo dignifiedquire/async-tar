@@ -379,16 +379,14 @@ impl<R: Read + Unpin> Entries<R> {
                     "Solaris extended headers are not supported",
                 ))));
             }
-            // The first header decides the format, and readers disagree on a pax header
-            // in a v7 archive.
+            // An archive whose first header has no magic is v7 and has no pax headers.
             let is_v7_archive = *is_v7_archive.get_or_insert(!is_recognized_header);
             let is_pax =
                 entry_type.is_pax_local_extensions() || entry_type.is_pax_global_extensions();
             if is_v7_archive && is_pax {
                 return Poll::Ready(Some(Err(other("a pax header in a v7 archive"))));
             }
-            // POSIX extracts an unknown type as a file, but readers disagree on whether
-            // it has data.
+            // An entry type this crate does not read is an error, except a GNU volume label.
             if matches!(entry_type, EntryType::Other(byte) if byte != b'V') {
                 return Poll::Ready(Some(Err(other("an entry type async-tar does not read"))));
             }
@@ -402,7 +400,7 @@ impl<R: Read + Unpin> Entries<R> {
                 }
 
                 ready_err!(Pin::new(new_fields).poll_read_all(cx, extension_body));
-                // GNU tar reads past a long name without its NUL, async-tar did not.
+                // A GNU long name or link ends in a NUL.
                 if extension_body.last() != Some(&0) {
                     return Poll::Ready(Some(Err(other("a GNU long name or link without a NUL"))));
                 }
@@ -419,7 +417,7 @@ impl<R: Read + Unpin> Entries<R> {
                     ))));
                 }
                 ready_err!(Pin::new(new_fields).poll_read_all(cx, extension_body));
-                // GNU tar reads past a long name without its NUL, async-tar did not.
+                // A GNU long name or link ends in a NUL.
                 if extension_body.last() != Some(&0) {
                     return Poll::Ready(Some(Err(other("a GNU long name or link without a NUL"))));
                 }
@@ -450,7 +448,8 @@ impl<R: Read + Unpin> Entries<R> {
                 ))));
             }
 
-            // GNU tar and Python apply these to every later member, and bsdtar ignores them.
+            // A pax global header may not set a size, path or linkpath. Its records stay
+            // readable through `Entry::pax_extensions`.
             let is_global = is_recognized_header && entry_type.is_pax_global_extensions();
             if is_global && new_fields.pax_extensions.is_none() {
                 ready_err!(Pin::new(&mut *new_fields).poll_read_all(cx, extension_body));
@@ -480,8 +479,7 @@ impl<R: Read + Unpin> Entries<R> {
             // so it doesn't leak onto the next entry
             *current_pax_extensions = None;
 
-            // Neither format says how the two interact, and GNU tar, bsdtar and Python
-            // disagree on which applies.
+            // A member takes its extensions from GNU or pax headers, never both.
             let has_gnu_extension =
                 new_fields.long_pathname.is_some() || new_fields.long_linkname.is_some();
             if has_gnu_extension && new_fields.pax_extensions.is_some() {
@@ -499,7 +497,7 @@ impl<R: Read + Unpin> Entries<R> {
                 return Poll::Ready(Some(Err(other("an empty pax path or linkpath"))));
             }
 
-            // A reader splitting pax records at newlines reads another name.
+            // A pax path or linkpath may not contain a newline.
             let has_newline = |key: &[u8]| {
                 new_fields
                     .pax_value(key)
@@ -509,15 +507,13 @@ impl<R: Read + Unpin> Entries<R> {
                 return Poll::Ready(Some(Err(other("a newline in a pax path or linkpath"))));
             }
 
-            // Windows reads a leading drive letter as a path prefix and Unix as a
-            // directory, so one archive unpacks differently on each.
+            // A name may not start with a drive letter such as `C:`.
             let path = new_fields.path_bytes();
             if matches!(&path[..], [letter, b':', ..] if letter.is_ascii_alphabetic()) {
                 return Poll::Ready(Some(Err(other("a name starting with a drive letter"))));
             }
 
-            // Readers disagree on whether a trailing slash or a name of . makes a link a
-            // directory.
+            // A link's name may not end in a slash or be `.`.
             let is_link = entry_type.is_symlink() || entry_type.is_hard_link();
             let is_dir_name = path.ends_with(b"/")
                 || path
@@ -527,7 +523,7 @@ impl<R: Read + Unpin> Entries<R> {
                 return Poll::Ready(Some(Err(other("a link named like a directory"))));
             }
 
-            // Readers decode a non-UTF-8 link target in different encodings.
+            // A link's target must be UTF-8.
             let is_target_utf8 = new_fields
                 .link_name_bytes()
                 .is_none_or(|target| std::str::from_utf8(&target).is_ok());
@@ -666,7 +662,7 @@ fn poll_next_raw<R: Read + Unpin>(
         return Poll::Ready(Some(Err(other("archive header checksum mismatch"))));
     }
 
-    // Readers disagree on whether such a header has a prefix field.
+    // A ustar or GNU magic must come with that format's version.
     if header.has_unknown_version() {
         return Poll::Ready(Some(Err(other(
             "archive header has an unknown ustar or GNU version",
@@ -794,8 +790,7 @@ fn poll_next_raw<R: Read + Unpin>(
     Poll::Ready(Some(Ok(ret.into_entry())))
 }
 
-// POSIX writes pax numbers in plain decimal, and readers disagree on what a sign
-// or a leading zero means.
+/// Returns the value of a pax number made of decimal digits without a leading zero.
 fn parse_pax_number(value: &str) -> Option<u64> {
     let is_plain = !value.is_empty()
         && value.bytes().all(|b| b.is_ascii_digit())
