@@ -183,6 +183,7 @@ impl<R: Read + Unpin> Archive<R> {
             archive: self,
             current: State::default(),
             fields: None,
+            extension_body: Vec::new(),
             gnu_longlink: None,
             gnu_longname: None,
             pax_extensions: None,
@@ -290,6 +291,8 @@ pub struct Entries<R: Read + Unpin> {
     archive: Archive<R>,
     current: State,
     fields: Option<EntryFields<Archive<R>>>,
+    // Keeps the bytes of an extension body read before a Pending read.
+    extension_body: Vec<u8>,
     gnu_longname: Option<Vec<u8>>,
     gnu_longlink: Option<Vec<u8>>,
     pax_extensions: Option<Vec<u8>>,
@@ -322,6 +325,7 @@ impl<R: Read + Unpin> Stream for Entries<R> {
             let Self {
                 current,
                 fields,
+                extension_body,
                 gnu_longname,
                 gnu_longlink,
                 archive,
@@ -360,7 +364,8 @@ impl<R: Read + Unpin> Stream for Entries<R> {
                     ))));
                 }
 
-                *gnu_longname = Some(ready_err!(Pin::new(new_fields).poll_read_all(cx)));
+                ready_err!(Pin::new(new_fields).poll_read_all(cx, extension_body));
+                *gnu_longname = Some(mem::take(extension_body));
                 *fields = None;
                 continue;
             }
@@ -372,7 +377,8 @@ impl<R: Read + Unpin> Stream for Entries<R> {
                          the same member",
                     ))));
                 }
-                *gnu_longlink = Some(ready_err!(Pin::new(new_fields).poll_read_all(cx)));
+                ready_err!(Pin::new(new_fields).poll_read_all(cx, extension_body));
+                *gnu_longlink = Some(mem::take(extension_body));
                 *fields = None;
                 continue;
             }
@@ -384,15 +390,23 @@ impl<R: Read + Unpin> Stream for Entries<R> {
                          the same member",
                     ))));
                 }
-                *pax_extensions = Some(ready_err!(Pin::new(new_fields).poll_read_all(cx)));
+                ready_err!(Pin::new(new_fields).poll_read_all(cx, extension_body));
+                *pax_extensions = Some(mem::take(extension_body));
                 *current_pax_extensions = pax_extensions.clone();
                 *fields = None;
                 continue;
             }
 
-            new_fields.long_pathname = gnu_longname.take();
-            new_fields.long_linkname = gnu_longlink.take();
-            new_fields.pax_extensions = pax_extensions.take();
+            // A Pending sparse header runs this again, so it keeps what an earlier pass moved.
+            if gnu_longname.is_some() {
+                new_fields.long_pathname = gnu_longname.take();
+            }
+            if gnu_longlink.is_some() {
+                new_fields.long_linkname = gnu_longlink.take();
+            }
+            if pax_extensions.is_some() {
+                new_fields.pax_extensions = pax_extensions.take();
+            }
             // these pax records apply to this entry only; clear the sizing copy
             // so it doesn't leak onto the next entry
             *current_pax_extensions = None;

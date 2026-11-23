@@ -1622,3 +1622,84 @@ async fn sparse_extension_does_not_carry_to_next_entry() {
     assert_eq!(&entries[1].1[..BLOCK], &[b'A'; BLOCK][..]);
     assert_eq!(&entries[1].1[BLOCK..], smuggled.as_bytes());
 }
+
+struct PendingReader<'a> {
+    data: &'a [u8],
+    is_pending: bool,
+}
+
+impl PendingReader<'_> {
+    fn poll_pending(&mut self, cx: &mut std::task::Context<'_>) -> bool {
+        self.is_pending = !self.is_pending;
+        if self.is_pending {
+            cx.waker().wake_by_ref();
+        }
+        self.is_pending
+    }
+}
+
+#[cfg(feature = "runtime-async-std")]
+impl Read for PendingReader<'_> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut [u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        if self.poll_pending(cx) {
+            return std::task::Poll::Pending;
+        }
+        let n = buf.len().min(self.data.len()).min(7);
+        buf[..n].copy_from_slice(&self.data[..n]);
+        self.data = &self.data[n..];
+        std::task::Poll::Ready(Ok(n))
+    }
+}
+
+#[cfg(feature = "runtime-tokio")]
+impl Read for PendingReader<'_> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        if self.poll_pending(cx) {
+            return std::task::Poll::Pending;
+        }
+        let n = buf.remaining().min(self.data.len()).min(7);
+        buf.put_slice(&self.data[..n]);
+        self.data = &self.data[n..];
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pending_reads_do_not_change_entries() {
+    let name = format!("long/{}/sparse_ext.txt", "n".repeat(120));
+    let mut long = Header::new_gnu();
+    t!(long.set_path("././@LongLink"));
+    long.set_entry_type(EntryType::new(b'L'));
+    long.set_size(name.len() as u64 + 1);
+    long.set_cksum();
+    let mut long_sparse = Vec::new();
+    push_block(&mut long_sparse, long.as_bytes());
+    push_block(&mut long_sparse, format!("{name}\0").as_bytes());
+    long_sparse.extend_from_slice(&tar!("sparse.tar")[2048..6144]);
+    long_sparse.extend(repeat(0u8).take(BLOCK * 2));
+
+    let archives = [
+        tar!("7z_long_path.tar"),
+        tar!("pax.tar"),
+        tar!("pax2.tar"),
+        &long_sparse[..],
+    ];
+    for archive in archives {
+        let expected = read_entries(archive).await;
+        let reader = PendingReader {
+            data: archive,
+            is_pending: false,
+        };
+        assert_eq!(read_entries(reader).await, expected);
+    }
+    assert_eq!(read_entries(&long_sparse[..]).await[0].0, name.as_bytes());
+}

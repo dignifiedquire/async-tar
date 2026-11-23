@@ -353,19 +353,20 @@ impl<R: Read + Unpin> EntryFields<R> {
         }
     }
 
+    /// Appends the rest of this entry to `out`. The caller keeps `out` across a `Pending`.
     pub(crate) fn poll_read_all(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<io::Result<Vec<u8>>> {
+        out: &mut Vec<u8>,
+    ) -> Poll<io::Result<()>> {
         // Preallocate some data but don't let ourselves get too crazy now.
-        let cap = cmp::min(self.size, 128 * 1024);
-        let mut buf = Vec::with_capacity(cap as usize);
+        if out.capacity() == 0 {
+            out.reserve(cmp::min(self.size, 128 * 1024) as usize);
+        }
 
         // Copied from futures::ReadToEnd
-        match ready!(poll_read_all_internal(self, cx, &mut buf)) {
-            Ok(_) => Poll::Ready(Ok(buf)),
-            Err(err) => Poll::Ready(Err(err)),
-        }
+        ready!(poll_read_all_internal(self, cx, out))?;
+        Poll::Ready(Ok(()))
     }
 
     pub async fn read_all(&mut self) -> io::Result<Vec<u8>> {
