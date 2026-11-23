@@ -453,6 +453,15 @@ impl<R: Read + Unpin> Entries<R> {
                 ))));
             }
 
+            // POSIX makes an empty value delete the header's name, leaving none.
+            if new_fields.pax_value(b"path").is_some_and(<[u8]>::is_empty)
+                || new_fields
+                    .pax_value(b"linkpath")
+                    .is_some_and(<[u8]>::is_empty)
+            {
+                return Poll::Ready(Some(Err(other("an empty pax path or linkpath"))));
+            }
+
             let State {
                 next,
                 current_header_pos,

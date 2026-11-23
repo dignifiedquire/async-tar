@@ -1930,3 +1930,26 @@ async fn gnu_sparse_pax_records_are_rejected() {
         assert!(entries.next().await.unwrap().is_err());
     }
 }
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn empty_pax_path_is_rejected() {
+    for (key, entry_type) in [
+        ("path", EntryType::Regular),
+        ("linkpath", EntryType::Symlink),
+    ] {
+        let mut tar = Vec::new();
+        push_pax(&mut tar, &pax_record(key, ""));
+        push_member(&mut tar, entry_type);
+
+        let mut entries = t!(Archive::new(&tar[..]).entries());
+        assert!(entries.next().await.unwrap().is_err(), "{key}");
+    }
+
+    let mut records = pax_record("path", "");
+    records.extend(pax_record("path", "from-pax"));
+    let mut tar = Vec::new();
+    push_pax(&mut tar, &records);
+    push_member(&mut tar, EntryType::Regular);
+    assert_eq!(read_entries(&tar[..]).await[0].0, b"from-pax");
+}
