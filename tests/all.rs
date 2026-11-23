@@ -1494,3 +1494,67 @@ async fn pax_size_does_not_leak_to_subsequent_entry() {
         second_body.len(),
     );
 }
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pax_last_path_wins() {
+    let mut recs = pax_record("path", "first.txt");
+    recs.extend(pax_record("path", "second.txt"));
+    let mut x = Header::new_ustar();
+    t!(x.set_path("PaxHeaders/0"));
+    x.set_entry_type(EntryType::new(b'x'));
+    x.set_size(recs.len() as u64);
+    x.set_cksum();
+
+    let body = b"hello\n";
+    let mut file = Header::new_ustar();
+    t!(file.set_path("header.txt"));
+    file.set_entry_type(EntryType::Regular);
+    file.set_size(body.len() as u64);
+    file.set_cksum();
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, x.as_bytes());
+    push_block(&mut tar, &recs);
+    push_block(&mut tar, file.as_bytes());
+    push_block(&mut tar, body);
+    tar.extend(repeat(0u8).take(BLOCK * 2));
+
+    let mut entries = t!(Archive::new(&tar[..]).entries());
+    let entry = t!(entries.next().await.unwrap());
+    assert_eq!(&*entry.path_bytes(), b"second.txt");
+
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
+    t!(Archive::new(&tar[..]).unpack(td.path()).await);
+    assert!(td.path().join("second.txt").exists());
+    assert!(!td.path().join("first.txt").exists());
+}
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pax_last_linkpath_wins() {
+    let mut recs = pax_record("linkpath", "first-target.txt");
+    recs.extend(pax_record("linkpath", "pax-target.txt"));
+    let mut x = Header::new_ustar();
+    t!(x.set_path("PaxHeaders/0"));
+    x.set_entry_type(EntryType::new(b'x'));
+    x.set_size(recs.len() as u64);
+    x.set_cksum();
+
+    let mut link = Header::new_ustar();
+    t!(link.set_path("link"));
+    link.set_entry_type(EntryType::Symlink);
+    t!(link.set_link_name("ustar-target.txt"));
+    link.set_size(0);
+    link.set_cksum();
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, x.as_bytes());
+    push_block(&mut tar, &recs);
+    push_block(&mut tar, link.as_bytes());
+    tar.extend(repeat(0u8).take(BLOCK * 2));
+
+    let mut entries = t!(Archive::new(&tar[..]).entries());
+    let entry = t!(entries.next().await.unwrap());
+    assert_eq!(&*entry.link_name_bytes().unwrap(), b"pax-target.txt");
+}

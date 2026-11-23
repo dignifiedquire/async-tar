@@ -387,17 +387,21 @@ impl<R: Read + Unpin> EntryFields<R> {
                 Cow::Borrowed(bytes)
             }
         } else {
-            if let Some(ref pax) = self.pax_extensions {
-                let pax = pax_extensions(pax)
-                    .filter_map(Result::ok)
-                    .find(|f| f.key_bytes() == b"path")
-                    .map(|f| f.value_bytes());
-                if let Some(field) = pax {
-                    return Cow::Borrowed(field);
-                }
+            if let Some(field) = self.pax_value(b"path") {
+                return Cow::Borrowed(field);
             }
             self.header.path_bytes()
         }
+    }
+
+    fn pax_value(&self, key: &[u8]) -> Option<&[u8]> {
+        let pax = self.pax_extensions.as_ref()?;
+        // POSIX gives the last of repeated records precedence, as GNU tar does.
+        pax_extensions(pax)
+            .filter_map(Result::ok)
+            .filter(|f| f.key_bytes() == key)
+            .last()
+            .map(|f| f.value_bytes())
     }
 
     /// Gets the path in a "lossy" way, used for error reporting ONLY.
@@ -421,7 +425,10 @@ impl<R: Read + Unpin> EntryFields<R> {
                     Some(Cow::Borrowed(bytes))
                 }
             }
-            None => self.header.link_name_bytes(),
+            None => match self.pax_value(b"linkpath") {
+                Some(field) => Some(Cow::Borrowed(field)),
+                None => self.header.link_name_bytes(),
+            },
         }
     }
 
