@@ -41,6 +41,7 @@ redox_syscall = "0.9"
 
 [lints.rust]
 missing_debug_implementations = "warn"
+missing_docs = "warn"
 
 [lints.clippy]
 unused_async = "warn"

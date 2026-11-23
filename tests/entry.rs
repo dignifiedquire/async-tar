@@ -1,3 +1,5 @@
+//! Tests for unpacking links, permissions and paths.
+
 #[cfg(feature = "runtime-smol")]
 use smol::{
     fs::{self, File},

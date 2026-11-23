@@ -1,3 +1,5 @@
+//! Tests for reading, writing and unpacking archives.
+
 use std::{
     iter::repeat_n,
     path::{Path, PathBuf},
