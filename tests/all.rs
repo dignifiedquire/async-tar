@@ -1991,3 +1991,32 @@ async fn malformed_pax_records_are_rejected() {
         assert!(entries.next().await.unwrap().is_err());
     }
 }
+
+async fn is_rejected(tar: &[u8]) -> bool {
+    let mut entries = t!(Archive::new(tar).entries());
+    while let Some(entry) = entries.next().await {
+        if entry.is_err() {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn gnu_tar_volume_label_reads() {
+    let mut label = Header::new_old();
+    t!(label.set_path("VOL1"));
+    label.set_entry_type(EntryType::new(b'V'));
+    label.as_mut_bytes()[124..136].fill(0);
+    label.set_cksum();
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, label.as_bytes());
+    push_member(&mut tar, EntryType::Regular);
+
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
+    t!(Archive::new(&tar[..]).unpack(td.path()).await);
+    assert!(td.path().join("from-header").exists());
+    assert!(!td.path().join("VOL1").exists());
+}

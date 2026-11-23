@@ -306,7 +306,7 @@ impl Header {
     ///
     /// May return an error if the field is corrupted.
     pub fn entry_size(&self) -> io::Result<u64> {
-        num_field_wrapper_from(&self.as_old().size).map_err(|err| {
+        size_from(&self.as_old().size).map_err(|err| {
             io::Error::new(
                 err.kind(),
                 format!("{} when getting size for {}", err, self.path_lossy()),
@@ -1424,6 +1424,15 @@ fn num_field_wrapper_into(dst: &mut [u8], src: u64) {
     } else {
         octal_into(dst, src);
     }
+}
+
+// GNU tar writes an all-NUL size on a volume label. GNU tar, bsdtar and Python
+// read it as 0.
+fn size_from(field: &[u8]) -> io::Result<u64> {
+    if field.iter().all(|b| *b == 0) {
+        return Ok(0);
+    }
+    num_field_wrapper_from(field)
 }
 
 // Wrapper to figure out if we should read the header field in binary (numeric
