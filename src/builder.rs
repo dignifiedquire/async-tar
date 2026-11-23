@@ -86,6 +86,8 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// This function will finish writing the archive if the `finish` function
     /// hasn't yet been called, returning any I/O error which happens during
     /// that operation.
+    ///
+    /// The writer is returned without a flush or close.
     pub async fn into_inner(mut self) -> io::Result<W> {
         if !self.finished {
             self.finish().await?;
@@ -412,6 +414,9 @@ impl<W: Write + Unpin + Send + Sync> Builder<W> {
     /// Finish writing this archive, emitting the two zero blocks ending it.
     ///
     /// A tar archive has no index, only these end blocks.
+    ///
+    /// This neither flushes nor closes the writer. Close an encoder after
+    /// taking it back with [`Builder::into_inner`].
     ///
     /// This function should only be called when the archive has been written
     /// entirely and if an I/O error happens the underlying object still needs
