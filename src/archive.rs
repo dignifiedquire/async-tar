@@ -33,9 +33,6 @@ use crate::{
     symlink_metadata,
 };
 
-/// The largest extension header or GNU sparse map read into memory, as Go caps them.
-const MAX_EXTENSION_SIZE: u64 = 1 << 20;
-
 /// A top-level representation of an archive file.
 ///
 /// This archive can have an entry added to it and it can be iterated over.
@@ -60,6 +57,11 @@ pub struct ArchiveInner<R: Read + Unpin> {
     mask: u32,
     preserve_mtime: bool,
     ignore_zeros: bool,
+    max_pax_extension_size: u64,
+    max_global_pax_extensions_size: u64,
+    max_gnu_extension_size: u64,
+    max_gnu_sparse_map_size: u64,
+    global_pax_extensions_size: u64,
     obj: R,
 }
 
@@ -72,6 +74,10 @@ pub struct ArchiveBuilder<R: Read + Unpin> {
     mask: u32,
     preserve_mtime: bool,
     ignore_zeros: bool,
+    max_pax_extension_size: u64,
+    max_global_pax_extensions_size: u64,
+    max_gnu_extension_size: u64,
+    max_gnu_sparse_map_size: u64,
 }
 
 impl<R: Read + Unpin> ArchiveBuilder<R> {
@@ -83,6 +89,10 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
             mask: 0o022,
             preserve_mtime: true,
             ignore_zeros: false,
+            max_pax_extension_size: 256 * 1024,
+            max_global_pax_extensions_size: 1024 * 1024,
+            max_gnu_extension_size: 128 * 1024,
+            max_gnu_sparse_map_size: 1024 * 1024,
             obj,
         }
     }
@@ -135,6 +145,40 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
         self
     }
 
+    /// Sets the largest pax header body read, local or global.
+    ///
+    /// A larger header is rejected before its body is read. The default is
+    /// 256 KiB.
+    pub fn set_max_pax_extension_size(mut self, size: u64) -> Self {
+        self.max_pax_extension_size = size;
+        self
+    }
+
+    /// Sets the largest total of the archive's pax global header bodies.
+    ///
+    /// A global header past it is rejected before its body is read. The default
+    /// is 1 MiB.
+    pub fn set_max_global_pax_extensions_size(mut self, size: u64) -> Self {
+        self.max_global_pax_extensions_size = size;
+        self
+    }
+
+    /// Sets the largest GNU long name or link read.
+    ///
+    /// A larger one is rejected before it is read. The default is 128 KiB.
+    pub fn set_max_gnu_extension_size(mut self, size: u64) -> Self {
+        self.max_gnu_extension_size = size;
+        self
+    }
+
+    /// Sets the largest GNU sparse map read, in bytes of its extension headers.
+    ///
+    /// The default is 1 MiB.
+    pub fn set_max_gnu_sparse_map_size(mut self, size: u64) -> Self {
+        self.max_gnu_sparse_map_size = size;
+        self
+    }
+
     /// Construct the archive, ready to accept inputs.
     pub fn build(self) -> Archive<R> {
         let Self {
@@ -143,6 +187,10 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
             mask,
             preserve_mtime,
             ignore_zeros,
+            max_pax_extension_size,
+            max_global_pax_extensions_size,
+            max_gnu_extension_size,
+            max_gnu_sparse_map_size,
             obj,
         } = self;
 
@@ -153,6 +201,11 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
                 mask,
                 preserve_mtime,
                 ignore_zeros,
+                max_pax_extension_size,
+                max_global_pax_extensions_size,
+                max_gnu_extension_size,
+                max_gnu_sparse_map_size,
+                global_pax_extensions_size: 0,
                 obj,
                 pos: 0,
             })),
@@ -163,17 +216,7 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
 impl<R: Read + Unpin> Archive<R> {
     /// Create a new archive with the underlying object as the reader.
     pub fn new(obj: R) -> Archive<R> {
-        Archive {
-            inner: Arc::new(Mutex::new(ArchiveInner {
-                unpack_xattrs: false,
-                preserve_permissions: false,
-                mask: 0o022,
-                preserve_mtime: true,
-                ignore_zeros: false,
-                obj,
-                pos: 0,
-            })),
-        }
+        ArchiveBuilder::new(obj).build()
     }
 
     /// Unwrap this archive, returning the underlying object.
@@ -798,8 +841,27 @@ fn poll_next_raw<R: Read + Unpin>(
         return Poll::Ready(Some(Err(other("archive header size is out of range"))));
     }
 
-    if is_extension_header && size > MAX_EXTENSION_SIZE {
-        return Poll::Ready(Some(Err(other("an extension header larger than 1 MiB"))));
+    // Extension bodies are read into memory, so their sizes are checked first.
+    {
+        let inner = &mut *archive.inner.lock().unwrap();
+        let is_gnu_extension = entry_type.is_gnu_longname() || entry_type.is_gnu_longlink();
+        if is_gnu_extension && size > inner.max_gnu_extension_size {
+            return Poll::Ready(Some(Err(other(
+                "a GNU long name or link over its size limit",
+            ))));
+        }
+        let is_global = entry_type.is_pax_global_extensions();
+        let is_pax_extension = is_global || entry_type.is_pax_local_extensions();
+        if is_pax_extension && size > inner.max_pax_extension_size {
+            return Poll::Ready(Some(Err(other("a pax header over its size limit"))));
+        }
+        if is_global {
+            let total = inner.global_pax_extensions_size.saturating_add(size);
+            if total > inner.max_global_pax_extensions_size {
+                return Poll::Ready(Some(Err(other("pax global headers over their size limit"))));
+            }
+            inner.global_pax_extensions_size = total;
+        }
     }
 
     let data = EntryIo::Data(archive.clone().take(size));
@@ -889,8 +951,9 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
         .last()
         .map_or(gnu.is_extended(), |ext| ext.is_extended())
     {
-        if ext_headers.len() as u64 >= MAX_EXTENSION_SIZE / 512 {
-            return Poll::Ready(Err(other("a GNU sparse map larger than 1 MiB")));
+        let max_map_size = archive.inner.lock().unwrap().max_gnu_sparse_map_size;
+        if (ext_headers.len() as u64 + 1).saturating_mul(512) > max_map_size {
+            return Poll::Ready(Err(other("a GNU sparse map over its size limit")));
         }
         if current_ext.is_none() {
             *current_ext_pos = 0;

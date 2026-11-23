@@ -1621,7 +1621,7 @@ fn sparse_member(slots: [GnuSparseHeader; 4], ext_headers: usize) -> Vec<u8> {
 
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
-async fn sparse_maps_over_one_mib_are_rejected() {
+async fn sparse_maps_over_their_limit_are_rejected() {
     let slots = || {
         std::array::from_fn(|i| match i {
             0 => sparse_slot(0, BLOCK as u64),
@@ -1633,6 +1633,10 @@ async fn sparse_maps_over_one_mib_are_rejected() {
     assert_eq!(entries, [(b"sparse".to_vec(), vec![b'A'; BLOCK])]);
 
     assert!(is_rejected(&sparse_member(slots(), 2049)).await);
+
+    let small = sparse_member(slots(), 2);
+    let limited = ArchiveBuilder::new(&small[..]).set_max_gnu_sparse_map_size(BLOCK as u64);
+    assert!(read_with(limited).await.is_err());
 }
 
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
@@ -2147,34 +2151,84 @@ async fn names_ending_in_a_slash_with_data_are_rejected() {
     }
 }
 
+fn pax_comment(len: usize) -> Vec<u8> {
+    let record = pax_record("comment", &"x".repeat(len));
+    pax_record("comment", &"x".repeat(2 * len - record.len()))
+}
+
+async fn read_with(builder: ArchiveBuilder<&[u8]>) -> Result<usize, io::Error> {
+    let mut entries = builder.build().entries()?;
+    let mut count = 0;
+    while let Some(entry) = entries.next().await {
+        entry?;
+        count += 1;
+    }
+    Ok(count)
+}
+
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
-async fn extension_headers_over_one_mib_are_rejected() {
-    let mib = 1 << 20;
-    let comment = |len: usize| {
-        let record = pax_record("comment", &"x".repeat(len));
-        let value_len = 2 * len - record.len();
-        pax_record("comment", &"x".repeat(value_len))
-    };
-    assert_eq!(comment(mib).len(), mib);
-
-    let mut at_limit = Vec::new();
-    push_pax(&mut at_limit, &comment(mib));
-    push_file(&mut at_limit, "a", b"");
-    at_limit.extend(repeat_n(0u8, BLOCK * 2));
-    assert_eq!(read_entries(&at_limit[..]).await.len(), 1);
-
-    let mut over_pax = Vec::new();
-    push_pax(&mut over_pax, &comment(mib + 1));
-    let mut over_gnu = Vec::new();
-    push_gnu_long(&mut over_gnu, b'L', &"a".repeat(mib));
-    for mut tar in [over_pax, over_gnu] {
+async fn extension_headers_over_their_limit_are_rejected() {
+    let kib = 1024;
+    let with_pax = |len| {
+        let mut tar = Vec::new();
+        push_pax(&mut tar, &pax_comment(len));
         push_file(&mut tar, "a", b"");
         tar.extend(repeat_n(0u8, BLOCK * 2));
-        let mut entries = t!(Archive::new(&tar[..]).entries());
-        assert!(entries.next().await.unwrap().is_err());
-        assert!(entries.next().await.is_none());
-    }
+        tar
+    };
+    let with_gnu = |len: usize| {
+        let mut tar = Vec::new();
+        push_gnu_long(&mut tar, b'L', &"a".repeat(len - 1));
+        push_file(&mut tar, "a", b"");
+        tar.extend(repeat_n(0u8, BLOCK * 2));
+        tar
+    };
+    assert_eq!(pax_comment(256 * kib).len(), 256 * kib);
+
+    let pax_at_limit = with_pax(256 * kib);
+    let pax_over = with_pax(256 * kib + 1);
+    let gnu_at_limit = with_gnu(128 * kib);
+    let gnu_over = with_gnu(128 * kib + 1);
+    assert_eq!(
+        t!(read_with(ArchiveBuilder::new(&pax_at_limit[..])).await),
+        1
+    );
+    assert_eq!(
+        t!(read_with(ArchiveBuilder::new(&gnu_at_limit[..])).await),
+        1
+    );
+    assert!(read_with(ArchiveBuilder::new(&pax_over[..])).await.is_err());
+    assert!(read_with(ArchiveBuilder::new(&gnu_over[..])).await.is_err());
+
+    let raised = |tar| {
+        ArchiveBuilder::new(tar)
+            .set_max_pax_extension_size(257 * kib as u64)
+            .set_max_gnu_extension_size(129 * kib as u64)
+    };
+    assert_eq!(t!(read_with(raised(&pax_over[..])).await), 1);
+    assert_eq!(t!(read_with(raised(&gnu_over[..])).await), 1);
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pax_global_headers_over_their_total_limit_are_rejected() {
+    let globals = |count| {
+        let mut tar = Vec::new();
+        for _ in 0..count {
+            push_pax_global(&mut tar, &pax_comment(256 * 1024));
+        }
+        push_file(&mut tar, "a", b"");
+        tar.extend(repeat_n(0u8, BLOCK * 2));
+        tar
+    };
+    let at_limit = globals(4);
+    let over = globals(5);
+
+    assert_eq!(t!(read_with(ArchiveBuilder::new(&at_limit[..])).await), 5);
+    assert!(read_with(ArchiveBuilder::new(&over[..])).await.is_err());
+    let unlimited = ArchiveBuilder::new(&over[..]).set_max_global_pax_extensions_size(u64::MAX);
+    assert_eq!(t!(read_with(unlimited).await), 6);
 }
 
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
