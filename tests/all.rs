@@ -1647,6 +1647,25 @@ async fn sparse_maps_with_an_entry_after_an_empty_slot_are_rejected() {
     assert!(is_rejected(&sparse_member(extended_after_empty, 1)).await);
 }
 
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn sparse_maps_extend_on_any_nonzero_flag() {
+    let slots = std::array::from_fn(|i| match i {
+        0 => sparse_slot(0, BLOCK as u64),
+        _ => sparse_slot(BLOCK as u64, 0),
+    });
+    let mut tar = sparse_member(slots, 2);
+    let mut header = Header::new_gnu();
+    header.as_mut_bytes().copy_from_slice(&tar[..BLOCK]);
+    header.as_gnu_mut().unwrap().isextended = [2];
+    header.set_cksum();
+    tar[..BLOCK].copy_from_slice(header.as_bytes());
+    tar[2 * BLOCK - 8] = 2;
+
+    let entries = read_entries(&tar[..]).await;
+    assert_eq!(entries, [(b"sparse".to_vec(), vec![b'A'; BLOCK])]);
+}
+
 struct PendingReader<'a> {
     data: &'a [u8],
     is_pending: bool,
