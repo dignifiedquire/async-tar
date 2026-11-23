@@ -2229,3 +2229,24 @@ async fn link_target_not_utf8_is_rejected() {
         assert!(is_rejected(&tar).await);
     }
 }
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pax_global_header_name_makes_no_directories() {
+    let comment = pax_record("comment", "label");
+    let mut global = Header::new_ustar();
+    t!(global.set_path("tmp/GlobalHead.1.1"));
+    global.set_entry_type(EntryType::new(b'g'));
+    global.set_size(comment.len() as u64);
+    global.set_cksum();
+
+    let mut tar = Vec::new();
+    push_block(&mut tar, global.as_bytes());
+    push_block(&mut tar, &comment);
+    push_member(&mut tar, EntryType::Regular);
+
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
+    t!(Archive::new(&tar[..]).unpack(td.path()).await);
+    assert!(td.path().join("from-header").exists());
+    assert!(!td.path().join("tmp").exists());
+}

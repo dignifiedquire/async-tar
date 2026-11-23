@@ -444,6 +444,12 @@ impl<R: Read + Unpin> EntryFields<R> {
     }
 
     async fn unpack_in(&mut self, dst: &Path) -> io::Result<bool> {
+        // GNU tar names a global header after its temporary directory. That path
+        // must not appear in `dst` either.
+        if self.header.entry_type().is_metadata() {
+            return Ok(true);
+        }
+
         // Notes regarding bsdtar 2.8.3 / libarchive 2.8.3:
         // * Leading '/'s are trimmed. For example, `///test` is treated as
         //   `test`.
@@ -630,13 +636,7 @@ impl<R: Read + Unpin> EntryFields<R> {
 
                 Ok(())
             }
-        } else if kind.is_pax_global_extensions()
-            || kind.is_pax_local_extensions()
-            || kind.is_gnu_longname()
-            || kind.is_gnu_longlink()
-            // Typeflag V is a GNU volume label, the name of the archive.
-            || kind.as_byte() == b'V'
-        {
+        } else if kind.is_metadata() {
             return Ok(Unpacked::Other);
         };
 

@@ -187,4 +187,13 @@ impl EntryType {
     pub fn is_pax_local_extensions(self) -> bool {
         self == EntryType::XHeader
     }
+
+    // Typeflag V is a GNU volume label, the name of the archive.
+    pub(crate) fn is_metadata(self) -> bool {
+        self.is_pax_global_extensions()
+            || self.is_pax_local_extensions()
+            || self.is_gnu_longname()
+            || self.is_gnu_longlink()
+            || self.as_byte() == b'V'
+    }
 }
