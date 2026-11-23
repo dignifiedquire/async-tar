@@ -57,6 +57,7 @@ pub struct ArchiveInner<R: Read + Unpin> {
     pos: u64,
     unpack_xattrs: bool,
     preserve_permissions: bool,
+    mask: u32,
     preserve_mtime: bool,
     ignore_zeros: bool,
     obj: R,
@@ -68,6 +69,7 @@ pub struct ArchiveBuilder<R: Read + Unpin> {
     obj: R,
     unpack_xattrs: bool,
     preserve_permissions: bool,
+    mask: u32,
     preserve_mtime: bool,
     ignore_zeros: bool,
 }
@@ -78,6 +80,7 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
         ArchiveBuilder {
             unpack_xattrs: false,
             preserve_permissions: false,
+            mask: 0o022,
             preserve_mtime: true,
             ignore_zeros: false,
             obj,
@@ -106,6 +109,14 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
         self
     }
 
+    /// Sets the permission bits cleared when unpacking, as a umask clears them.
+    ///
+    /// The default `0o022` clears group and other write. Only Unix applies a mask.
+    pub fn set_mask(mut self, mask: u32) -> Self {
+        self.mask = mask;
+        self
+    }
+
     /// Indicate whether access time information is preserved when unpacking
     /// this entry.
     ///
@@ -129,6 +140,7 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
         let Self {
             unpack_xattrs,
             preserve_permissions,
+            mask,
             preserve_mtime,
             ignore_zeros,
             obj,
@@ -138,6 +150,7 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
             inner: Arc::new(Mutex::new(ArchiveInner {
                 unpack_xattrs,
                 preserve_permissions,
+                mask,
                 preserve_mtime,
                 ignore_zeros,
                 obj,
@@ -154,6 +167,7 @@ impl<R: Read + Unpin> Archive<R> {
             inner: Arc::new(Mutex::new(ArchiveInner {
                 unpack_xattrs: false,
                 preserve_permissions: false,
+                mask: 0o022,
                 preserve_mtime: true,
                 ignore_zeros: false,
                 obj,
@@ -794,6 +808,7 @@ fn poll_next_raw<R: Read + Unpin>(
         unpack_xattrs,
         preserve_mtime,
         preserve_permissions,
+        mask,
         ..
     } = &*archive.inner.lock().unwrap();
 
@@ -808,6 +823,7 @@ fn poll_next_raw<R: Read + Unpin>(
         pax_extensions: None,
         unpack_xattrs: *unpack_xattrs,
         preserve_permissions: *preserve_permissions,
+        mask: *mask,
         preserve_mtime: *preserve_mtime,
         read_state: None,
     };

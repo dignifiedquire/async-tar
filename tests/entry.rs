@@ -185,7 +185,9 @@ async fn directory_maintains_permissions() {
     t!(ar.append(&header, &[][..]).await);
 
     let bytes = t!(ar.into_inner().await);
-    let ar = async_tar::Archive::new(&bytes[..]);
+    let ar = async_tar::ArchiveBuilder::new(&bytes[..])
+        .set_mask(0)
+        .build();
 
     let td = t!(Builder::new().prefix("tar").tempdir());
     t!(ar.unpack(td.path()).await);

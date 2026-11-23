@@ -2254,6 +2254,51 @@ async fn failed_long_name_append_leaves_no_long_name() {
     assert_eq!(entries, [(b"innocent.txt".to_vec(), Vec::new())]);
 }
 
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+#[cfg(unix)]
+async fn unpacked_modes_are_masked() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut ar = Builder::new(Vec::new());
+    for (path, entry_type) in [
+        ("dir", EntryType::Directory),
+        ("dir/file", EntryType::Regular),
+    ] {
+        let mut header = Header::new_gnu();
+        header.set_entry_type(entry_type);
+        header.set_mode(0o777);
+        header.set_size(0);
+        t!(ar.append_data(&mut header, path, &[][..]).await);
+    }
+    let tar = t!(ar.into_inner().await);
+    let modes = |td: &TempDir| {
+        ["dir", "dir/file"].map(|path| {
+            let meta = t!(std::fs::metadata(td.path().join(path)));
+            meta.permissions().mode() & 0o777
+        })
+    };
+
+    for (mask, expected) in [(None, 0o755), (Some(0), 0o777), (Some(0o077), 0o700)] {
+        let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
+        let mut builder = ArchiveBuilder::new(&tar[..]);
+        if let Some(mask) = mask {
+            builder = builder.set_mask(mask);
+        }
+        t!(builder.build().unpack(td.path()).await);
+        assert_eq!(modes(&td), [expected; 2], "mask {mask:?}");
+    }
+
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
+    let mut entries = t!(Archive::new(&tar[..]).entries());
+    while let Some(entry) = entries.next().await {
+        let mut entry = t!(entry);
+        entry.set_mask(0o077);
+        t!(entry.unpack_in(td.path()).await);
+    }
+    assert_eq!(modes(&td), [0o700; 2]);
+}
+
 async fn is_rejected(tar: &[u8]) -> bool {
     let mut entries = t!(Archive::new(tar).entries());
     while let Some(entry) = entries.next().await {

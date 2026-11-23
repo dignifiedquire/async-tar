@@ -61,6 +61,7 @@ pub struct EntryFields<R: Read + Unpin> {
     pub data: VecDeque<EntryIo<R>>,
     pub unpack_xattrs: bool,
     pub preserve_permissions: bool,
+    pub mask: u32,
     pub preserve_mtime: bool,
     pub(crate) read_state: Option<EntryIo<R>>,
 }
@@ -78,6 +79,7 @@ impl<R: Read + Unpin> fmt::Debug for EntryFields<R> {
             .field("data", &self.data)
             .field("unpack_xattrs", &self.unpack_xattrs)
             .field("preserve_permissions", &self.preserve_permissions)
+            .field("mask", &self.mask)
             .field("preserve_mtime", &self.preserve_mtime)
             .field("read_state", &self.read_state)
             .finish()
@@ -305,6 +307,13 @@ impl<R: Read + Unpin> Entry<R> {
     /// Unix.
     pub fn set_preserve_permissions(&mut self, preserve: bool) {
         self.fields.preserve_permissions = preserve;
+    }
+
+    /// Sets the permission bits cleared when unpacking, as a umask clears them.
+    ///
+    /// The default is the archive's mask. Only Unix applies a mask.
+    pub fn set_mask(&mut self, mask: u32) {
+        self.fields.mask = mask;
     }
 
     /// Indicate whether access time information is preserved when unpacking
@@ -540,7 +549,7 @@ impl<R: Read + Unpin> EntryFields<R> {
         if kind.is_dir() {
             self.unpack_dir(dst).await?;
             if let Ok(mode) = self.header.mode() {
-                set_perms(dst, None, mode, self.preserve_permissions).await?;
+                set_perms(dst, None, mode, self.preserve_permissions, self.mask).await?;
             }
             return Ok(Unpacked::Other);
         } else if kind.is_hard_link() || kind.is_symlink() {
@@ -644,7 +653,7 @@ impl<R: Read + Unpin> EntryFields<R> {
         if self.header.as_ustar().is_none() && self.path_bytes().ends_with(b"/") {
             self.unpack_dir(dst).await?;
             if let Ok(mode) = self.header.mode() {
-                set_perms(dst, None, mode, self.preserve_permissions).await?;
+                set_perms(dst, None, mode, self.preserve_permissions, self.mask).await?;
             }
             return Ok(Unpacked::Other);
         }
@@ -734,7 +743,14 @@ impl<R: Read + Unpin> EntryFields<R> {
             }
         }
         if let Ok(mode) = self.header.mode() {
-            set_perms(dst, Some(&mut f), mode, self.preserve_permissions).await?;
+            set_perms(
+                dst,
+                Some(&mut f),
+                mode,
+                self.preserve_permissions,
+                self.mask,
+            )
+            .await?;
         }
         if self.unpack_xattrs {
             set_xattrs(self, dst).await?;
@@ -746,8 +762,9 @@ impl<R: Read + Unpin> EntryFields<R> {
             f: Option<&mut fs::File>,
             mode: u32,
             preserve: bool,
+            mask: u32,
         ) -> Result<(), TarError> {
-            _set_perms(dst, f, mode, preserve).await.map_err(|e| {
+            _set_perms(dst, f, mode, preserve, mask).await.map_err(|e| {
                 TarError::new(
                     &format!(
                         "failed to set permissions to {:o} \
@@ -766,10 +783,11 @@ impl<R: Read + Unpin> EntryFields<R> {
             f: Option<&mut fs::File>,
             mode: u32,
             preserve: bool,
+            mask: u32,
         ) -> io::Result<()> {
             use std::os::unix::prelude::*;
 
-            let mode = if preserve { mode } else { mode & 0o777 };
+            let mode = if preserve { mode } else { mode & 0o777 } & !mask;
             let perm = Permissions::from_mode(mode as _);
             match f {
                 Some(f) => f.set_permissions(perm).await,
@@ -783,6 +801,7 @@ impl<R: Read + Unpin> EntryFields<R> {
             f: Option<&mut fs::File>,
             mode: u32,
             _preserve: bool,
+            _mask: u32,
         ) -> io::Result<()> {
             if mode & 0o200 == 0o200 {
                 return Ok(());
@@ -808,6 +827,7 @@ impl<R: Read + Unpin> EntryFields<R> {
             f: Option<&mut fs::File>,
             mode: u32,
             _preserve: bool,
+            _mask: u32,
         ) -> io::Result<()> {
             Err(io::Error::new(io::ErrorKind::Other, "Not implemented"))
         }
