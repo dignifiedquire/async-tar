@@ -491,6 +491,16 @@ impl<R: Read + Unpin> EntryFields<R> {
                     // CVE-2002-0399, CVE-2005-1918, CVE-2007-4131
                     Component::ParentDir => return Ok(false),
 
+                    // Windows reads a colon in a component as a drive or an NTFS stream.
+                    Component::Normal(part)
+                        if cfg!(windows) && part.as_encoded_bytes().contains(&b':') =>
+                    {
+                        return Err(other(&format!(
+                            "a colon in the entry name {}",
+                            self.path_lossy()
+                        )));
+                    }
+
                     Component::Normal(part) => file_dst.push(part),
                 }
             }

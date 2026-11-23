@@ -2299,6 +2299,23 @@ async fn unpacked_modes_are_masked() {
     assert_eq!(modes(&td), [0o700; 2]);
 }
 
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+#[cfg(windows)]
+async fn names_with_a_colon_are_rejected_on_windows() {
+    for name in ["file.txt:hidden", "a/C:x/evil.txt"] {
+        let mut tar = Vec::new();
+        push_file(&mut tar, "file.txt", b"base");
+        push_pax(&mut tar, &pax_record("path", name));
+        push_file(&mut tar, "placeholder", b"hidden");
+        tar.extend(repeat_n(0u8, BLOCK * 2));
+
+        let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
+        assert!(Archive::new(&tar[..]).unpack(td.path()).await.is_err());
+        assert!(std::fs::metadata(td.path().join("file.txt:hidden")).is_err());
+    }
+}
+
 async fn is_rejected(tar: &[u8]) -> bool {
     let mut entries = t!(Archive::new(tar).entries());
     while let Some(entry) = entries.next().await {
