@@ -516,6 +516,17 @@ impl<R: Read + Unpin> Entries<R> {
                 return Poll::Ready(Some(Err(other("a name starting with a drive letter"))));
             }
 
+            // Readers disagree on whether a trailing slash or a name of . makes a link a
+            // directory.
+            let is_link = entry_type.is_symlink() || entry_type.is_hard_link();
+            let is_dir_name = path.ends_with(b"/")
+                || path
+                    .split(|b| *b == b'/')
+                    .all(|part| part.is_empty() || part == b".");
+            if is_link && is_dir_name {
+                return Poll::Ready(Some(Err(other("a link named like a directory"))));
+            }
+
             let State {
                 next,
                 current_header_pos,

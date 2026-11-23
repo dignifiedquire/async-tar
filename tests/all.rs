@@ -2185,3 +2185,25 @@ async fn drive_letter_name_is_rejected() {
     tar.extend(repeat(0u8).take(BLOCK * 2));
     assert!(is_rejected(&tar).await);
 }
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn link_named_like_directory_is_rejected() {
+    for (name, entry_type) in [
+        (&b"link/"[..], EntryType::Symlink),
+        (b"b/", EntryType::Link),
+        (b".", EntryType::Symlink),
+    ] {
+        let mut header = Header::new_gnu();
+        header.as_mut_bytes()[..name.len()].copy_from_slice(name);
+        header.set_entry_type(entry_type);
+        t!(header.set_link_name("target"));
+        header.set_size(0);
+        header.set_cksum();
+
+        let mut tar = Vec::new();
+        push_block(&mut tar, header.as_bytes());
+        tar.extend(repeat(0u8).take(BLOCK * 2));
+        assert!(is_rejected(&tar).await, "{}", String::from_utf8_lossy(name));
+    }
+}
