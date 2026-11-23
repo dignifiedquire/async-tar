@@ -4,6 +4,7 @@ use std::{
     borrow::Cow,
     cmp,
     collections::VecDeque,
+    ffi::OsStr,
     fmt, marker,
     path::{Component, Path, PathBuf},
     pin::Pin,
@@ -491,12 +492,9 @@ impl<R: Read + Unpin> EntryFields<R> {
                     // CVE-2002-0399, CVE-2005-1918, CVE-2007-4131
                     Component::ParentDir => return Ok(false),
 
-                    // Windows reads a colon in a component as a drive or an NTFS stream.
-                    Component::Normal(part)
-                        if cfg!(windows) && part.as_encoded_bytes().contains(&b':') =>
-                    {
+                    Component::Normal(part) if is_windows_reserved(part) => {
                         return Err(other(&format!(
-                            "a colon in the entry name {}",
+                            "a name Windows reads as a drive, stream or device: {}",
                             self.path_lossy()
                         )));
                     }
@@ -1078,6 +1076,66 @@ impl<R: Read + Unpin> Read for EntryIo<R> {
 /// Returns the error for a truncated member.
 fn truncation_error() -> Error {
     Error::new(ErrorKind::UnexpectedEof, "archive member is truncated")
+}
+
+/// Returns whether Windows reads a name component as a drive, a stream or a device.
+#[cfg(windows)]
+fn is_windows_reserved(part: &OsStr) -> bool {
+    part.as_encoded_bytes().contains(&b':') || is_device_name(part)
+}
+
+#[cfg(not(windows))]
+fn is_windows_reserved(_: &OsStr) -> bool {
+    false
+}
+
+/// Returns whether Windows opens `name` as a device, such as `NUL` or `COM1`.
+#[cfg(windows)]
+fn is_device_name(name: &OsStr) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn RtlIsDosDeviceName_U(name: *const u16) -> u32;
+    }
+
+    // A device name may be followed by an extension, a stream or spaces.
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    let base = name.split(['.', ':']).next().unwrap_or_default();
+    let base = base.trim_end_matches(' ');
+    if !is_device_base_name(base) {
+        return false;
+    }
+    if base.len() == name.len() {
+        return true;
+    }
+
+    // Since Windows 11 a device name with an extension, such as `CON.txt`, is a
+    // file, so Windows decides.
+    let wide: Vec<u16> = OsStr::new(name).encode_wide().chain([0]).collect();
+    // SAFETY: `wide` is a NUL-terminated UTF-16 string that outlives the call.
+    unsafe { RtlIsDosDeviceName_U(wide.as_ptr()) != 0 }
+}
+
+/// Returns whether `name` is a Windows device name without an extension.
+#[cfg(windows)]
+fn is_device_base_name(name: &str) -> bool {
+    let name = name.to_ascii_uppercase();
+    if matches!(
+        name.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) {
+        return true;
+    }
+    match name.split_at_checked(3) {
+        Some(("COM" | "LPT", number)) => {
+            matches!(number.as_bytes(), [b'1'..=b'9'])
+                || matches!(number, "\u{b9}" | "\u{b2}" | "\u{b3}")
+        }
+        _ => false,
+    }
 }
 
 struct Guard<'a> {
