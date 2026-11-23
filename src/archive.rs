@@ -609,6 +609,11 @@ fn poll_next_raw<R: Read + Unpin>(
         for extension in pax {
             let extension = extension.map_err(|_e| other("pax extensions invalid"))?;
 
+            // GNU tar and bsdtar expand these into another name and contents.
+            if extension.key_bytes().starts_with(b"GNU.sparse.") {
+                return Poll::Ready(Some(Err(other("GNU sparse pax records are not supported"))));
+            }
+
             // ignore keys that aren't parsable as a string at this stage.
             // that isn't relevant to the size/uid/gid processing.
             let Some(key) = extension.key().ok() else {

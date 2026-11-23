@@ -1912,3 +1912,21 @@ async fn unread_extension_headers_are_rejected() {
         assert!(entries.next().await.unwrap().is_err());
     }
 }
+
+#[cfg_attr(feature = "runtime-async-std", async_std::test)]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn gnu_sparse_pax_records_are_rejected() {
+    let mut name_only = pax_record("path", "path-name");
+    name_only.extend(pax_record("GNU.sparse.name", "sparse-name"));
+    let mut sparse_1_0 = pax_record("GNU.sparse.major", "1");
+    sparse_1_0.extend(pax_record("GNU.sparse.minor", "0"));
+
+    for records in [name_only, sparse_1_0] {
+        let mut tar = Vec::new();
+        push_pax(&mut tar, &records);
+        push_member(&mut tar, EntryType::Regular);
+
+        let mut entries = t!(Archive::new(&tar[..]).entries());
+        assert!(entries.next().await.unwrap().is_err());
+    }
+}
