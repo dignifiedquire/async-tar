@@ -2020,3 +2020,25 @@ async fn gnu_tar_volume_label_reads() {
     assert!(td.path().join("from-header").exists());
     assert!(!td.path().join("VOL1").exists());
 }
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn base256_size_beyond_64_bits_is_rejected() {
+    let build = |size: [u8; 12]| {
+        let mut header = Header::new_gnu();
+        t!(header.set_path("a"));
+        header.as_mut_bytes()[124..136].copy_from_slice(&size);
+        header.set_cksum();
+        let mut tar = Vec::new();
+        push_block(&mut tar, header.as_bytes());
+        push_block(&mut tar, &[b'x'; BLOCK]);
+        tar.extend(repeat(0u8).take(BLOCK * 2));
+        tar
+    };
+
+    let too_large = build([0x80, 0, 0, 1, 0, 0, 0, 0, 0, 0, 2, 0]);
+    assert!(is_rejected(&too_large).await);
+
+    let fits = build([0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0]);
+    assert_eq!(read_entries(&fits[..]).await[0].1.len(), BLOCK);
+}

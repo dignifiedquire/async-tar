@@ -1441,7 +1441,7 @@ fn num_field_wrapper_from(src: &[u8]) -> io::Result<u64> {
     if src[0] & 0x80 == 0 {
         octal_from(src)
     } else {
-        Ok(numeric_extended_from(src))
+        numeric_extended_from(src)
     }
 }
 
@@ -1460,7 +1460,7 @@ fn numeric_extended_into(dst: &mut [u8], src: u64) {
     dst[0] |= 0x80;
 }
 
-fn numeric_extended_from(src: &[u8]) -> u64 {
+fn numeric_extended_from(src: &[u8]) -> io::Result<u64> {
     let mut dst: u64 = 0;
     let mut b_to_skip = 1;
     if src.len() == 8 {
@@ -1469,12 +1469,15 @@ fn numeric_extended_from(src: &[u8]) -> u64 {
     } else {
         // only read last 8 bytes
         b_to_skip = src.len() - 8;
+        if src[0] != 0x80 || src[1..b_to_skip].iter().any(|b| *b != 0) {
+            return Err(other("base-256 number does not fit in 64 bits"));
+        }
     }
     for byte in src.iter().skip(b_to_skip) {
         dst <<= 8;
         dst |= *byte as u64;
     }
-    dst
+    Ok(dst)
 }
 
 fn truncate(slice: &[u8]) -> &[u8] {
