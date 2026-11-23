@@ -2122,3 +2122,38 @@ async fn gnu_long_name_without_nul_is_rejected() {
         assert!(is_rejected(&tar).await, "{}", typeflag as char);
     }
 }
+
+fn push_pax_global(tar: &mut Vec<u8>, records: &[u8]) {
+    let mut g = Header::new_ustar();
+    t!(g.set_path("GlobalHead"));
+    g.set_entry_type(EntryType::new(b'g'));
+    g.set_size(records.len() as u64);
+    g.set_cksum();
+    push_block(tar, g.as_bytes());
+    push_block(tar, records);
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn pax_global_size_path_or_linkpath_is_rejected() {
+    for (key, value) in [("size", "512"), ("path", "global-name"), ("linkpath", "x")] {
+        let mut tar = Vec::new();
+        push_pax_global(&mut tar, &pax_record(key, value));
+        push_member(&mut tar, EntryType::Regular);
+        assert!(is_rejected(&tar).await, "{key}");
+    }
+
+    let comment = pax_record("comment", "0123abcd");
+    let mut tar = Vec::new();
+    push_pax_global(&mut tar, &comment);
+    push_member(&mut tar, EntryType::Regular);
+    let mut entries = t!(Archive::new(&tar[..]).entries());
+    let mut global = t!(entries.next().await.unwrap());
+    let records = t!(global.pax_extensions().await).unwrap();
+    let keys: Vec<_> = records.map(|r| t!(r).key_bytes().to_vec()).collect();
+    assert_eq!(keys, [b"comment".to_vec()]);
+    assert_eq!(
+        &*t!(entries.next().await.unwrap()).path_bytes(),
+        b"from-header"
+    );
+}

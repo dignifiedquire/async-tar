@@ -450,6 +450,22 @@ impl<R: Read + Unpin> Entries<R> {
                 ))));
             }
 
+            // GNU tar and Python apply these to every later member, and bsdtar ignores them.
+            let is_global = is_recognized_header && entry_type.is_pax_global_extensions();
+            if is_global && new_fields.pax_extensions.is_none() {
+                ready_err!(Pin::new(&mut *new_fields).poll_read_all(cx, extension_body));
+                let records = mem::take(extension_body);
+                for record in crate::pax::pax_extensions(&records) {
+                    let record = record.map_err(|_e| other("pax extensions invalid"))?;
+                    if matches!(record.key_bytes(), b"size" | b"path" | b"linkpath") {
+                        return Poll::Ready(Some(Err(other(
+                            "a pax global header with a size, path or linkpath",
+                        ))));
+                    }
+                }
+                new_fields.pax_extensions = Some(records);
+            }
+
             // A Pending sparse header runs this again, so it keeps what an earlier pass moved.
             if gnu_longname.is_some() {
                 new_fields.long_pathname = gnu_longname.take();
