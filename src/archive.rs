@@ -44,6 +44,10 @@ const MAX_BATCH_BYTES: usize = 1024 * 1024;
 /// A top-level representation of an archive file.
 ///
 /// This archive can have an entry added to it and it can be iterated over.
+///
+/// The archive reads in pieces as small as a 512-byte header. Wrap a
+/// `tokio::fs::File` in a `BufReader`, because each of its reads is a
+/// blocking call.
 #[derive(Debug)]
 pub struct Archive<R: Read + Unpin> {
     inner: Arc<Mutex<ArchiveInner<R>>>,
