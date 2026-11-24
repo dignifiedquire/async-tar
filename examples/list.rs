@@ -2,7 +2,6 @@
 //!
 //! Takes a tarball on stdin and prints out all of the entries inside.
 
-#[cfg(feature = "runtime-smol")]
 use std::io;
 
 use async_tar::Archive;
@@ -18,21 +17,22 @@ fn stdin() -> Unblock<io::Stdin> {
     Unblock::new(io::stdin())
 }
 
-async fn inner_main() {
+async fn inner_main() -> io::Result<()> {
     let ar = Archive::new(stdin());
-    let mut entries = ar.entries().unwrap();
+    let mut entries = ar.entries()?;
     while let Some(file) = entries.next().await {
-        let f = file.unwrap();
-        println!("{}", f.path().unwrap().display());
+        let f = file?;
+        println!("{}", f.path()?.display());
     }
+    Ok(())
 }
 
 #[cfg(feature = "runtime-smol")]
-fn main() {
-    smol::block_on(inner_main());
+fn main() -> io::Result<()> {
+    smol::block_on(inner_main())
 }
 
 #[cfg(feature = "runtime-tokio")]
-fn main() {
-    Runtime::new().unwrap().block_on(inner_main());
+fn main() -> io::Result<()> {
+    Runtime::new()?.block_on(inner_main())
 }

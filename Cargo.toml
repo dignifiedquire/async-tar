@@ -51,9 +51,11 @@ unsafe_code = "deny"
 [lints.clippy]
 absolute_paths = "warn"
 allow_attributes_without_reason = "warn"
+expect_used = "warn"
 manual_let_else = "warn"
 or_fun_call = "warn"
 unused_async = "warn"
+unwrap_used = "warn"
 use_self = "warn"
 
 [features]

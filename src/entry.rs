@@ -457,15 +457,18 @@ impl<R: Read + Unpin> EntryFields<R> {
     }
 
     async fn pax_extensions(&mut self) -> io::Result<Option<PaxExtensions<'_>>> {
-        if self.pax_extensions.is_none() {
-            if !self.header.entry_type().is_pax_global_extensions()
-                && !self.header.entry_type().is_pax_local_extensions()
-            {
-                return Ok(None);
+        let records = match self.pax_extensions.take() {
+            Some(records) => records,
+            None => {
+                if !self.header.entry_type().is_pax_global_extensions()
+                    && !self.header.entry_type().is_pax_local_extensions()
+                {
+                    return Ok(None);
+                }
+                self.read_all().await?
             }
-            self.pax_extensions = Some(self.read_all().await?);
-        }
-        Ok(Some(pax_extensions(self.pax_extensions.as_ref().unwrap())))
+        };
+        Ok(Some(pax_extensions(self.pax_extensions.insert(records))))
     }
 
     async fn unpack_in(&mut self, dst: &Path, canon_dst: Option<&Path>) -> io::Result<bool> {

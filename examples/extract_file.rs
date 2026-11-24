@@ -4,9 +4,7 @@
 //! name as the first argument provided, and then prints the contents of that
 //! file to stdout.
 
-#[cfg(feature = "runtime-smol")]
-use std::io;
-use std::{env::args_os, path::Path};
+use std::{env::args_os, io, path::Path};
 
 use async_tar::Archive;
 #[cfg(feature = "runtime-smol")]
@@ -33,27 +31,29 @@ fn stdout() -> Unblock<io::Stdout> {
     Unblock::new(io::stdout())
 }
 
-async fn inner_main() {
-    let first_arg = args_os().nth(1).unwrap();
+async fn inner_main() -> io::Result<()> {
+    let first_arg = args_os()
+        .nth(1)
+        .ok_or_else(|| io::Error::other("usage: extract_file <path>"))?;
     let filename = Path::new(&first_arg);
     let ar = Archive::new(stdin());
     let mut out = stdout();
-    let mut entries = ar.entries().unwrap();
+    let mut entries = ar.entries()?;
     while let Some(file) = entries.next().await {
-        let mut f = file.unwrap();
-        if f.path().unwrap() == filename {
-            copy(&mut f, &mut out).await.unwrap();
+        let mut f = file?;
+        if f.path()? == filename {
+            copy(&mut f, &mut out).await?;
         }
     }
-    out.flush().await.unwrap();
+    out.flush().await
 }
 
 #[cfg(feature = "runtime-smol")]
-fn main() {
-    smol::block_on(inner_main());
+fn main() -> io::Result<()> {
+    smol::block_on(inner_main())
 }
 
 #[cfg(feature = "runtime-tokio")]
-fn main() {
-    Runtime::new().unwrap().block_on(inner_main());
+fn main() -> io::Result<()> {
+    Runtime::new()?.block_on(inner_main())
 }

@@ -125,6 +125,10 @@ impl<W: Write + Unpin> Builder<W> {
     }
 
     /// Gets shared reference to the underlying object.
+    #[expect(
+        clippy::unwrap_used,
+        reason = "obj is None only after into_inner, which consumes the builder"
+    )]
     pub fn get_ref(&self) -> &W {
         &self.obj.as_ref().unwrap().writer
     }
@@ -139,6 +143,10 @@ impl<W: Write + Unpin> Builder<W> {
         &mut self.output().writer
     }
 
+    #[expect(
+        clippy::unwrap_used,
+        reason = "obj is None only after into_inner, which consumes the builder"
+    )]
     fn output(&mut self) -> &mut Output<W> {
         self.obj.as_mut().unwrap()
     }
@@ -154,7 +162,10 @@ impl<W: Write + Unpin> Builder<W> {
         if !self.finished {
             self.finish().await?;
         }
-        Ok(self.obj.take().unwrap().writer)
+        let Some(output) = self.obj.take() else {
+            return Err(other("the builder's writer was already taken"));
+        };
+        Ok(output.writer)
     }
 
     /// Adds a new entry to this archive.
@@ -630,7 +641,7 @@ async fn append_dir<W: Write + Unpin + ?Sized>(
 fn prepare_header(size: u64, entry_type: EntryType) -> Header {
     let mut header = Header::new_gnu();
     let name = b"././@LongLink";
-    header.as_gnu_mut().unwrap().name[..name.len()].clone_from_slice(&name[..]);
+    header.as_old_mut().name[..name.len()].clone_from_slice(&name[..]);
     header.set_mode(0o644);
     header.set_uid(0);
     header.set_gid(0);
@@ -723,7 +734,7 @@ async fn append_dir_all<W: Write + Unpin + ?Sized>(
 ) -> io::Result<()> {
     let mut stack = vec![(src_path.to_path_buf(), true, false)];
     while let Some((src, is_dir, is_symlink)) = stack.pop() {
-        let dest = path.join(src.strip_prefix(src_path).unwrap());
+        let dest = path.join(src.strip_prefix(src_path).map_err(io::Error::other)?);
         if is_dir {
             let (stat, children) = read_dir_children(src, follow).await?;
             stack.extend(children);

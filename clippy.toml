@@ -1,0 +1,3 @@
+# A test asserts with `unwrap` and `expect`, so these lints skip test code.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
