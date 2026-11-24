@@ -485,9 +485,8 @@ impl<R: Read + Unpin> EntryFields<R> {
         }
 
         // Skip entries without a parent (i.e. outside of FS root)
-        let parent = match file_dst.parent() {
-            Some(p) => p,
-            None => return Ok(false),
+        let Some(parent) = file_dst.parent() else {
+            return Ok(false);
         };
 
         let canon_dst = match canon_dst {
@@ -681,14 +680,11 @@ impl<R: Read + Unpin> EntryFields<R> {
             }
             return Ok(Unpacked::Other);
         } else if kind.is_hard_link() || kind.is_symlink() {
-            let src = match self.link_name()? {
-                Some(name) => name,
-                None => {
-                    return Err(other(&format!(
-                        "hard link listed for {} but no link name found",
-                        String::from_utf8_lossy(self.header.as_bytes())
-                    )));
-                }
+            let Some(src) = self.link_name()? else {
+                return Err(other(&format!(
+                    "hard link listed for {} but no link name found",
+                    String::from_utf8_lossy(self.header.as_bytes())
+                )));
             };
 
             if src.iter().count() == 0 {
@@ -958,9 +954,8 @@ impl<R: Read + Unpin> EntryFields<R> {
         ) -> io::Result<()> {
             use std::{ffi::OsStr, os::unix::prelude::*};
 
-            let exts = match me.pax_extensions().await {
-                Ok(Some(e)) => e,
-                _ => return Ok(()),
+            let Ok(Some(exts)) = me.pax_extensions().await else {
+                return Ok(());
             };
             let exts = exts
                 .filter_map(Result::ok)

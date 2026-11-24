@@ -49,6 +49,7 @@ unreachable_pub = "warn"
 
 [lints.clippy]
 absolute_paths = "warn"
+manual_let_else = "warn"
 unused_async = "warn"
 use_self = "warn"
 

@@ -42,20 +42,14 @@ impl<'entry> Iterator for PaxExtensions<'entry> {
             return (!is_padding).then(|| Err(other("malformed pax extension: data after NUL")));
         }
 
-        let space_idx = match self.data.iter().position(|b| *b == b' ') {
-            Some(idx) => idx,
-            None => {
-                self.data = &[];
-                return Some(Err(other("malformed pax extension: no space after length")));
-            }
+        let Some(space_idx) = self.data.iter().position(|b| *b == b' ') else {
+            self.data = &[];
+            return Some(Err(other("malformed pax extension: no space after length")));
         };
 
-        let len_str = match str::from_utf8(&self.data[..space_idx]) {
-            Ok(s) => s,
-            Err(_) => {
-                self.data = &[];
-                return Some(Err(other("malformed pax extension: non-utf8 length")));
-            }
+        let Ok(len_str) = str::from_utf8(&self.data[..space_idx]) else {
+            self.data = &[];
+            return Some(Err(other("malformed pax extension: non-utf8 length")));
         };
 
         let is_decimal = !len_str.is_empty() && len_str.bytes().all(|b| b.is_ascii_digit());
@@ -83,11 +77,8 @@ impl<'entry> Iterator for PaxExtensions<'entry> {
         };
 
         let kv = &record_content[space_idx + 1..];
-        let equals_idx = match kv.iter().position(|b| *b == b'=') {
-            Some(idx) => idx,
-            None => {
-                return Some(Err(other("malformed pax extension: no '=' in record")));
-            }
+        let Some(equals_idx) = kv.iter().position(|b| *b == b'=') else {
+            return Some(Err(other("malformed pax extension: no '=' in record")));
         };
 
         Some(Ok(PaxExtension {

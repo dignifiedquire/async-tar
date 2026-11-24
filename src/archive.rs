@@ -483,9 +483,7 @@ impl<R: Read + Unpin> Entries<R> {
                 ..
             } = current;
 
-            let new_fields = if let Some(fields) = fields.as_mut() {
-                fields
-            } else {
+            let Some(new_fields) = fields.as_mut() else {
                 *fields = Some(EntryFields::from(ready_opt_err!(poll_next_raw(
                     archive,
                     next,
@@ -995,9 +993,8 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
         return Poll::Ready(Ok(()));
     }
 
-    let gnu = match entry.header.as_gnu() {
-        Some(gnu) => gnu,
-        None => return Poll::Ready(Err(other("sparse entry type listed but not GNU header"))),
+    let Some(gnu) = entry.header.as_gnu() else {
+        return Poll::Ready(Err(other("sparse entry type listed but not GNU header")));
     };
 
     // Sparse files are represented internally as a list of blocks that are
