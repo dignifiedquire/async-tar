@@ -1617,7 +1617,7 @@ fn ends_with_slash(p: &Path) -> bool {
 }
 
 #[cfg(any(windows, target_arch = "wasm32"))]
-pub fn path2bytes(p: &Path) -> io::Result<Cow<'_, [u8]>> {
+pub(crate) fn path2bytes(p: &Path) -> io::Result<Cow<'_, [u8]>> {
     p.as_os_str()
         .to_str()
         .map(|s| s.as_bytes())
@@ -1640,14 +1640,14 @@ pub fn path2bytes(p: &Path) -> io::Result<Cow<'_, [u8]>> {
 
 #[cfg(any(unix, target_os = "redox"))]
 /// On unix this will never fail
-pub fn path2bytes(p: &Path) -> io::Result<Cow<'_, [u8]>> {
+pub(crate) fn path2bytes(p: &Path) -> io::Result<Cow<'_, [u8]>> {
     Ok(Cow::Borrowed(p.as_os_str().as_bytes()))
 }
 
 #[cfg(windows)]
 /// On windows we cannot accept non-Unicode bytes because it
 /// is impossible to convert it to UTF-16.
-pub fn bytes2path(bytes: Cow<'_, [u8]>) -> io::Result<Cow<'_, Path>> {
+pub(crate) fn bytes2path(bytes: Cow<'_, [u8]>) -> io::Result<Cow<'_, Path>> {
     return match bytes {
         Cow::Borrowed(bytes) => {
             let s = str::from_utf8(bytes).map_err(|_| not_unicode(bytes))?;
@@ -1669,7 +1669,7 @@ pub fn bytes2path(bytes: Cow<'_, [u8]>) -> io::Result<Cow<'_, Path>> {
 
 #[cfg(any(unix, target_os = "redox"))]
 /// On unix this operation can never fail.
-pub fn bytes2path(bytes: Cow<'_, [u8]>) -> io::Result<Cow<'_, Path>> {
+pub(crate) fn bytes2path(bytes: Cow<'_, [u8]>) -> io::Result<Cow<'_, Path>> {
     use std::ffi::{OsStr, OsString};
 
     Ok(match bytes {
@@ -1679,7 +1679,7 @@ pub fn bytes2path(bytes: Cow<'_, [u8]>) -> io::Result<Cow<'_, Path>> {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn bytes2path(bytes: Cow<'_, [u8]>) -> io::Result<Cow<'_, Path>> {
+pub(crate) fn bytes2path(bytes: Cow<'_, [u8]>) -> io::Result<Cow<'_, Path>> {
     Ok(match bytes {
         Cow::Borrowed(bytes) => {
             Cow::Borrowed({ Path::new(str::from_utf8(bytes).map_err(invalid_utf8)?) })

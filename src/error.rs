@@ -6,13 +6,13 @@ use futures_lite::io::{self, Error};
 use tokio::io::{self, Error};
 
 #[derive(Debug)]
-pub struct TarError {
+pub(crate) struct TarError {
     desc: String,
     io: io::Error,
 }
 
 impl TarError {
-    pub fn new(desc: &str, err: Error) -> TarError {
+    pub(crate) fn new(desc: &str, err: Error) -> TarError {
         TarError {
             desc: desc.to_string(),
             io: err,

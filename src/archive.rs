@@ -62,7 +62,7 @@ impl<R: Read + Unpin> Clone for Archive<R> {
 }
 
 #[derive(Debug)]
-pub struct ArchiveInner<R: Read + Unpin> {
+pub(crate) struct ArchiveInner<R: Read + Unpin> {
     pos: u64,
     unpack_xattrs: bool,
     preserve_permissions: bool,

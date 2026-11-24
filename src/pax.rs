@@ -23,7 +23,7 @@ pub struct PaxExtension<'entry> {
     value: &'entry [u8],
 }
 
-pub fn pax_extensions(a: &[u8]) -> PaxExtensions<'_> {
+pub(crate) fn pax_extensions(a: &[u8]) -> PaxExtensions<'_> {
     PaxExtensions { data: a }
 }
 

@@ -33,7 +33,7 @@ use futures_lite::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt}
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub use crate::{
-    archive::{Archive, ArchiveBuilder, Entries},
+    archive::{Archive, ArchiveBuilder, Entries, RawEntries},
     builder::Builder,
     entry::{Entry, Unpacked},
     entry_type::EntryType,

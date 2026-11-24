@@ -52,7 +52,7 @@ impl<R: Read + Unpin> fmt::Debug for Entry<R> {
 
 // private implementation detail of `Entry`, but concrete (no type parameters)
 // and also all-public to be constructed from other modules.
-pub struct EntryFields<R: Read + Unpin> {
+pub(crate) struct EntryFields<R: Read + Unpin> {
     pub long_pathname: Option<Vec<u8>>,
     pub long_linkname: Option<Vec<u8>>,
     pub pax_extensions: Option<Vec<u8>>,
@@ -88,7 +88,7 @@ impl<R: Read + Unpin> fmt::Debug for EntryFields<R> {
     }
 }
 
-pub enum EntryIo<R: Read + Unpin> {
+pub(crate) enum EntryIo<R: Read + Unpin> {
     Pad(io::Take<io::Repeat>),
     Data(io::Take<R>),
 }
@@ -364,11 +364,11 @@ impl<R: Read + Unpin> Read for Entry<R> {
 }
 
 impl<R: Read + Unpin> EntryFields<R> {
-    pub fn from(entry: Entry<R>) -> Self {
+    pub(crate) fn from(entry: Entry<R>) -> Self {
         entry.fields
     }
 
-    pub fn into_entry(self) -> Entry<R> {
+    pub(crate) fn into_entry(self) -> Entry<R> {
         Entry {
             fields: self,
             _ignored: marker::PhantomData,
@@ -391,7 +391,7 @@ impl<R: Read + Unpin> EntryFields<R> {
         Poll::Ready(Ok(()))
     }
 
-    pub async fn read_all(&mut self) -> io::Result<Vec<u8>> {
+    pub(crate) async fn read_all(&mut self) -> io::Result<Vec<u8>> {
         // Preallocate some data but don't let ourselves get too crazy now.
         let cap = cmp::min(self.size, 128 * 1024);
         let mut v = Vec::with_capacity(cap as usize);
