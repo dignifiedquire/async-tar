@@ -143,8 +143,8 @@ impl Header {
     /// The GNU style header is the default for this library and allows various
     /// extensions such as long path names, long link names, and setting the
     /// atime/ctime metadata attributes of files.
-    pub fn new_gnu() -> Header {
-        let mut header = Header { bytes: [0; 512] };
+    pub fn new_gnu() -> Self {
+        let mut header = Self { bytes: [0; 512] };
         unsafe {
             let gnu = cast_mut::<_, GnuHeader>(&mut header);
             gnu.magic = *b"ustar ";
@@ -161,8 +161,8 @@ impl Header {
     /// too long) path name.
     ///
     /// UStar is also the basis used for pax archives.
-    pub fn new_ustar() -> Header {
-        let mut header = Header { bytes: [0; 512] };
+    pub fn new_ustar() -> Self {
+        let mut header = Self { bytes: [0; 512] };
         unsafe {
             let gnu = cast_mut::<_, UstarHeader>(&mut header);
             gnu.magic = *b"ustar\0";
@@ -178,8 +178,8 @@ impl Header {
     /// versions are compatible with (e.g. they are a superset). This header
     /// format limits the path name limit and isn't able to contain extra
     /// metadata like atime/ctime.
-    pub fn new_old() -> Header {
-        let mut header = Header { bytes: [0; 512] };
+    pub fn new_old() -> Self {
+        let mut header = Self { bytes: [0; 512] };
         header.set_mtime(0);
         header
     }
@@ -271,10 +271,10 @@ impl Header {
     /// Treats the given byte slice as a header.
     ///
     /// Panics if the length of the passed slice is not equal to 512.
-    pub fn from_byte_slice(bytes: &[u8]) -> &Header {
-        assert_eq!(bytes.len(), mem::size_of::<Header>());
-        assert_eq!(mem::align_of_val(bytes), mem::align_of::<Header>());
-        unsafe { &*(bytes.as_ptr() as *const Header) }
+    pub fn from_byte_slice(bytes: &[u8]) -> &Self {
+        assert_eq!(bytes.len(), mem::size_of::<Self>());
+        assert_eq!(mem::align_of_val(bytes), mem::align_of::<Self>());
+        unsafe { &*(bytes.as_ptr() as *const Self) }
     }
 
     /// Returns a view into this header as a byte array.
@@ -914,8 +914,8 @@ unsafe fn cast_mut<T, U>(a: &mut T) -> &mut U {
 }
 
 impl Clone for Header {
-    fn clone(&self) -> Header {
-        Header { bytes: self.bytes }
+    fn clone(&self) -> Self {
+        Self { bytes: self.bytes }
     }
 }
 
@@ -1361,20 +1361,20 @@ impl fmt::Debug for GnuSparseHeader {
 
 impl GnuExtSparseHeader {
     /// Crates a new zero'd out sparse header entry.
-    pub fn new() -> GnuExtSparseHeader {
+    pub fn new() -> Self {
         unsafe { mem::zeroed() }
     }
 
     /// Returns a view into this header as a byte array.
     pub fn as_bytes(&self) -> &[u8; 512] {
         debug_assert_eq!(mem::size_of_val(self), 512);
-        unsafe { &*(self as *const GnuExtSparseHeader as *const [u8; 512]) }
+        unsafe { &*(self as *const Self as *const [u8; 512]) }
     }
 
     /// Returns a view into this header as a byte array.
     pub fn as_mut_bytes(&mut self) -> &mut [u8; 512] {
         debug_assert_eq!(mem::size_of_val(self), 512);
-        unsafe { &mut *(self as *mut GnuExtSparseHeader as *mut [u8; 512]) }
+        unsafe { &mut *(self as *mut Self as *mut [u8; 512]) }
     }
 
     /// Returns a slice of the underlying sparse headers.

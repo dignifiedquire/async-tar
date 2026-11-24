@@ -12,8 +12,8 @@ pub(crate) struct TarError {
 }
 
 impl TarError {
-    pub(crate) fn new(desc: &str, err: Error) -> TarError {
-        TarError {
+    pub(crate) fn new(desc: &str, err: Error) -> Self {
+        Self {
             desc: desc.to_string(),
             io: err,
         }
@@ -37,7 +37,7 @@ impl fmt::Display for TarError {
 }
 
 impl From<TarError> for Error {
-    fn from(t: TarError) -> Error {
-        Error::new(t.io.kind(), t)
+    fn from(t: TarError) -> Self {
+        Self::new(t.io.kind(), t)
     }
 }

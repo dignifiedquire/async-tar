@@ -55,7 +55,7 @@ pub struct Archive<R: Read + Unpin> {
 
 impl<R: Read + Unpin> Clone for Archive<R> {
     fn clone(&self) -> Self {
-        Archive {
+        Self {
             inner: self.inner.clone(),
         }
     }
@@ -95,7 +95,7 @@ pub struct ArchiveBuilder<R: Read + Unpin> {
 impl<R: Read + Unpin> ArchiveBuilder<R> {
     /// Create a new builder.
     pub fn new(obj: R) -> Self {
-        ArchiveBuilder {
+        Self {
             unpack_xattrs: false,
             preserve_permissions: false,
             mask: 0o022,
@@ -227,7 +227,7 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
 
 impl<R: Read + Unpin> Archive<R> {
     /// Create a new archive with the underlying object as the reader.
-    pub fn new(obj: R) -> Archive<R> {
+    pub fn new(obj: R) -> Self {
         ArchiveBuilder::new(obj).build()
     }
 
@@ -379,7 +379,7 @@ struct SmallFiles {
 
 impl SmallFiles {
     fn new(canon_dst: PathBuf) -> Self {
-        SmallFiles {
+        Self {
             canon_dst,
             files: Vec::new(),
             size: 0,

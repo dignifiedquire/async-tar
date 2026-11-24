@@ -96,8 +96,8 @@ pub(crate) enum EntryIo<R: Read + Unpin> {
 impl<R: Read + Unpin> fmt::Debug for EntryIo<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EntryIo::Pad(_) => write!(f, "EntryIo::Pad"),
-            EntryIo::Data(_) => write!(f, "EntryIo::Data"),
+            Self::Pad(_) => write!(f, "EntryIo::Pad"),
+            Self::Data(_) => write!(f, "EntryIo::Data"),
         }
     }
 }
@@ -1254,8 +1254,8 @@ impl<R: Read + Unpin> Read for EntryIo<R> {
         into: &mut [u8],
     ) -> Poll<io::Result<usize>> {
         match &mut *self {
-            EntryIo::Pad(io) => Pin::new(io).poll_read(cx, into),
-            EntryIo::Data(io) => {
+            Self::Pad(io) => Pin::new(io).poll_read(cx, into),
+            Self::Data(io) => {
                 let n = ready!(Pin::new(&mut *io).poll_read(cx, into))?;
                 if n == 0 && !into.is_empty() && io.limit() > 0 {
                     return Poll::Ready(Err(truncation_error()));
@@ -1274,8 +1274,8 @@ impl<R: Read + Unpin> Read for EntryIo<R> {
         into: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         match &mut *self {
-            EntryIo::Pad(io) => Pin::new(io).poll_read(cx, into),
-            EntryIo::Data(io) => {
+            Self::Pad(io) => Pin::new(io).poll_read(cx, into),
+            Self::Data(io) => {
                 let filled = into.filled().len();
                 ready!(Pin::new(&mut *io).poll_read(cx, into))?;
                 if into.filled().len() == filled && into.remaining() > 0 && io.limit() > 0 {

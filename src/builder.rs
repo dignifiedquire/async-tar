@@ -93,8 +93,8 @@ impl<W: Write + Unpin> Builder<W> {
     /// Create a new archive builder with the underlying object as the
     /// destination of all data written. The builder will use
     /// `HeaderMode::Complete` by default.
-    pub fn new(obj: W) -> Builder<W> {
-        Builder {
+    pub fn new(obj: W) -> Self {
+        Self {
             mode: HeaderMode::Complete,
             follow: true,
             finished: false,
