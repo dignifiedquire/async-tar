@@ -20,7 +20,8 @@ contents are never required to be entirely resident in memory all at once.
 [dependencies]
 async-fs = { version = "2.2", optional = true }
 futures-lite = { version = "2.6", optional = true }
-tokio = { version = "1.49", optional = true, features = ["fs", "io-util"] }
+blocking = { version = "1.6", optional = true }
+tokio = { version = "1.49", optional = true, features = ["fs", "io-util", "rt"] }
 tokio-stream = { version = "0.1.18", features = ["fs"], optional = true }
 futures-core = "0.3.31"
 
@@ -48,5 +49,5 @@ unused_async = "warn"
 
 [features]
 default = ["xattr", "runtime-smol"]
-runtime-smol = ["async-fs", "futures-lite"]
+runtime-smol = ["async-fs", "futures-lite", "blocking"]
 runtime-tokio = ["tokio", "tokio-stream"]
