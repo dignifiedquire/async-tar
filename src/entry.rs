@@ -5,7 +5,9 @@ use std::{
     cmp,
     collections::VecDeque,
     ffi::OsStr,
-    fmt, marker,
+    fmt,
+    fs::FileTimes,
+    marker,
     path::{Component, Path},
     pin::Pin,
     task::{Context, Poll},
@@ -13,7 +15,7 @@ use std::{
 };
 
 #[cfg(feature = "runtime-smol")]
-use async_fs::{self as fs, OpenOptions};
+use async_fs as fs;
 use futures_core::ready;
 #[cfg(feature = "runtime-smol")]
 use futures_lite::io::{
@@ -22,13 +24,12 @@ use futures_lite::io::{
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
     fs,
-    fs::OpenOptions,
     io::{self, AsyncRead as Read, AsyncReadExt, AsyncSeekExt, Error, ErrorKind, SeekFrom},
 };
 
 use crate::{
-    Archive, Header, PaxExtensions, error::TarError, fs_canonicalize, header::bytes2path, other,
-    pax::pax_extensions, symlink_metadata,
+    Archive, COPY_CHUNK_SIZE, Header, PaxExtensions, error::TarError, fs_canonicalize,
+    header::bytes2path, other, pax::pax_extensions, symlink_metadata,
 };
 
 /// A read-only view into an entry of an archive.
@@ -696,28 +697,55 @@ impl<R: Read + Unpin> EntryFields<R> {
 
         // Ensure we write a new file rather than overwriting in-place which
         // is attackable; if an existing file is found unlink it.
-        async fn open(dst: &Path) -> io::Result<fs::File> {
-            OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(dst)
-                .await
-        }
+        // An mtime beyond the range of `SystemTime` stays unset.
+        let mtime = self
+            .header
+            .mtime()
+            .ok()
+            .and_then(|mtime| UNIX_EPOCH.checked_add(Duration::from_secs(mtime)))
+            .filter(|_| self.preserve_mtime);
+
+        // A small file is read from the archive first, then created, written and
+        // given its mtime in one blocking call.
+        let small = match self.data.front() {
+            Some(EntryIo::Data(d))
+                if self.data.len() == 1 && d.limit() <= COPY_CHUNK_SIZE as u64 =>
+            {
+                self.data.pop_front()
+            }
+            _ => None,
+        };
+        let is_small = small.is_some();
         let mut f = async {
-            let mut f = match open(dst).await {
-                Ok(f) => Ok(f),
-                Err(err) => {
-                    if err.kind() == ErrorKind::AlreadyExists {
-                        match fs::remove_file(dst).await {
-                            Ok(()) => open(dst).await,
-                            Err(ref e) if e.kind() == io::ErrorKind::NotFound => open(dst).await,
-                            Err(e) => Err(e),
-                        }
-                    } else {
-                        Err(err)
-                    }
+            if let Some(EntryIo::Data(mut d)) = small {
+                let expected = d.limit();
+                let mut data = Vec::with_capacity(expected as usize);
+                if d.read_to_end(&mut data).await? as u64 != expected {
+                    return Err(other("failed to write entire file"));
                 }
-            }?;
+                let dst = dst.to_path_buf();
+                let file = crate::unblock(move || {
+                    use std::io::Write as _;
+
+                    let mut file = create_new_replacing(&dst)?;
+                    file.write_all(&data)?;
+                    if let Some(mtime) = mtime {
+                        let times = FileTimes::new().set_accessed(mtime).set_modified(mtime);
+                        file.set_times(times).map_err(|e| {
+                            Error::new(
+                                e.kind(),
+                                format!("{e} when setting the mtime of `{}`", dst.display()),
+                            )
+                        })?;
+                    }
+                    Ok(file)
+                })
+                .await?;
+                return Ok(fs::File::from(file));
+            }
+
+            let dst = dst.to_path_buf();
+            let mut f = fs::File::from(crate::unblock(move || create_new_replacing(&dst)).await?);
             for io in self.data.drain(..) {
                 match io {
                     EntryIo::Data(mut d) => {
@@ -749,25 +777,15 @@ impl<R: Read + Unpin> EntryFields<R> {
             )
         })?;
 
-        if self.preserve_mtime {
-            // An mtime beyond the range of `SystemTime` stays unset.
-            let mtime = self
-                .header
-                .mtime()
-                .ok()
-                .and_then(|mtime| UNIX_EPOCH.checked_add(Duration::from_secs(mtime)));
-            if let Some(mtime) = mtime {
-                let times = std::fs::FileTimes::new()
-                    .set_accessed(mtime)
-                    .set_modified(mtime);
-                std::fs::OpenOptions::new()
-                    .write(true)
-                    .open(dst)
-                    .and_then(|file| file.set_times(times))
-                    .map_err(|e| {
-                        TarError::new(&format!("failed to set mtime for `{}`", dst.display()), e)
-                    })?;
-            }
+        if let Some(mtime) = mtime.filter(|_| !is_small) {
+            let times = FileTimes::new().set_accessed(mtime).set_modified(mtime);
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(dst)
+                .and_then(|file| file.set_times(times))
+                .map_err(|e| {
+                    TarError::new(&format!("failed to set mtime for `{}`", dst.display()), e)
+                })?;
         }
         if let Ok(mode) = self.header.mode() {
             set_perms(
@@ -1083,6 +1101,24 @@ impl<R: Read + Unpin> Read for EntryIo<R> {
                 Poll::Ready(Ok(()))
             }
         }
+    }
+}
+
+/// Creates `dst` for writing, replacing a file or link already there.
+fn create_new_replacing(dst: &Path) -> io::Result<std::fs::File> {
+    let open = || {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dst)
+    };
+    match open() {
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => match std::fs::remove_file(dst) {
+            Ok(()) => open(),
+            Err(e) if e.kind() == ErrorKind::NotFound => open(),
+            Err(e) => Err(e),
+        },
+        result => result,
     }
 }
 

@@ -1,25 +1,30 @@
-use std::{borrow::Cow, fs::Metadata, path::Path};
+use std::{
+    borrow::Cow,
+    fs::Metadata,
+    path::{Path, PathBuf},
+};
 
 #[cfg(feature = "runtime-smol")]
 use async_fs as fs;
 #[cfg(feature = "runtime-smol")]
-use futures_lite::{
-    io::{self, AsyncRead as Read, AsyncReadExt, AsyncWrite as Write, AsyncWriteExt},
-    stream::StreamExt,
-};
+use futures_lite::io::{self, AsyncRead as Read, AsyncReadExt, AsyncWrite as Write, AsyncWriteExt};
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
     fs,
     io::{self, AsyncRead as Read, AsyncReadExt, AsyncWrite as Write, AsyncWriteExt},
 };
-#[cfg(feature = "runtime-tokio")]
-use tokio_stream::StreamExt;
 
 use crate::{
     EntryType, Header,
     header::{HeaderMode, bytes2path, path2bytes},
     metadata, other, symlink_metadata,
 };
+
+/// The most directory entries read in one blocking call.
+const DIR_CHUNK_SIZE: usize = 4096;
+
+/// A directory child: its path, whether to descend into it, and whether it is a symlink.
+type Child = (PathBuf, bool, bool);
 
 /// A structure for building archives
 ///
@@ -713,37 +718,90 @@ async fn append_dir_all<W: Write + Unpin + ?Sized>(
     let mut stack = vec![(src_path.to_path_buf(), true, false)];
     while let Some((src, is_dir, is_symlink)) = stack.pop() {
         let dest = path.join(src.strip_prefix(src_path).unwrap());
-
-        async fn check_is_dir(path: &Path) -> bool {
-            fs::metadata(path)
-                .await
-                .map(|m| m.is_dir())
-                .unwrap_or(false)
-        }
-
-        // In case of a symlink pointing to a directory, is_dir is false, but src.is_dir() will return true
-        if is_dir || (is_symlink && follow && check_is_dir(&src).await) {
-            #[cfg(feature = "runtime-smol")]
-            let mut entries = fs::read_dir(&src).await?;
-            #[cfg(feature = "runtime-tokio")]
-            let mut entries = tokio_stream::wrappers::ReadDirStream::new(fs::read_dir(&src).await?);
-            while let Some(entry) = entries.next().await {
-                let entry = entry?;
-                let file_type = entry.file_type().await?;
-                stack.push((entry.path(), file_type.is_dir(), file_type.is_symlink()));
-            }
+        if is_dir {
+            let (stat, children) = read_dir_children(src, follow).await?;
+            stack.extend(children);
             if dest != Path::new("") {
-                append_dir(dst, &dest, &src, mode).await?;
+                append_fs(dst, &dest, &stat, &mut io::empty(), mode, None).await?;
             }
         } else if !follow && is_symlink {
-            let stat = fs::symlink_metadata(&src).await?;
-            let link_name = fs::read_link(&src).await?;
+            let (stat, link_name) = crate::unblock(move || {
+                Ok((std::fs::symlink_metadata(&src)?, std::fs::read_link(&src)?))
+            })
+            .await?;
             append_fs(dst, &dest, &stat, &mut io::empty(), mode, Some(&link_name)).await?;
         } else {
-            append_file(dst, &dest, &mut fs::File::open(src).await?, mode).await?;
+            let (stat, contents) = open_file(src).await?;
+            let read: &mut (dyn Read + Unpin + Sync + Send) = match contents {
+                FileContents::Read(ref data) => &mut &data[..],
+                FileContents::Open(file) => &mut fs::File::from(file),
+            };
+            append_fs(dst, &dest, &stat, read, mode, None).await?;
         }
     }
     Ok(())
+}
+
+/// Returns a directory's metadata and its children, read in chunks of [`DIR_CHUNK_SIZE`].
+async fn read_dir_children(dir: PathBuf, follow: bool) -> io::Result<(Metadata, Vec<Child>)> {
+    let (stat, mut entries, (mut children, mut is_done)) = crate::unblock(move || {
+        let stat = std::fs::metadata(&dir)?;
+        let mut entries = std::fs::read_dir(&dir)?;
+        let first = read_children(&mut entries, follow)?;
+        Ok((stat, entries, first))
+    })
+    .await?;
+    while !is_done {
+        let (rest, (chunk, is_last)) = crate::unblock(move || {
+            let chunk = read_children(&mut entries, follow)?;
+            Ok((entries, chunk))
+        })
+        .await?;
+        entries = rest;
+        is_done = is_last;
+        children.extend(chunk);
+    }
+    Ok((stat, children))
+}
+
+/// Reads up to [`DIR_CHUNK_SIZE`] children, and returns them with whether none are left.
+fn read_children(entries: &mut std::fs::ReadDir, follow: bool) -> io::Result<(Vec<Child>, bool)> {
+    let mut children = Vec::new();
+    for entry in entries.by_ref().take(DIR_CHUNK_SIZE) {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let path = entry.path();
+        let is_symlink = file_type.is_symlink();
+        let is_dir = file_type.is_dir()
+            || (follow && is_symlink && std::fs::metadata(&path).is_ok_and(|m| m.is_dir()));
+        children.push((path, is_dir, is_symlink));
+    }
+    let is_done = children.len() < DIR_CHUNK_SIZE;
+    Ok((children, is_done))
+}
+
+/// A file's contents, read whole when small, or the open file to stream.
+enum FileContents {
+    Read(Vec<u8>),
+    Open(std::fs::File),
+}
+
+/// Opens `path` and returns its metadata, reading a regular file of up to one copy chunk whole.
+async fn open_file(path: PathBuf) -> io::Result<(Metadata, FileContents)> {
+    use std::io::Read as _;
+
+    crate::unblock(move || {
+        let file = std::fs::File::open(&path)?;
+        let stat = file.metadata()?;
+        if !stat.is_file() || stat.len() > crate::COPY_CHUNK_SIZE as u64 {
+            return Ok((stat, FileContents::Open(file)));
+        }
+        // The append notices a file that grew by the byte read past its size.
+        let mut data = Vec::with_capacity(stat.len() as usize + 1);
+        file.take(stat.len() + 1).read_to_end(&mut data)?;
+        Ok((stat, FileContents::Read(data)))
+    })
+    .await
 }
 
 #[cfg(feature = "runtime-smol")]
@@ -773,6 +831,11 @@ mod tests {
         rc::Rc,
         task::{Context, Poll},
     };
+
+    #[cfg(feature = "runtime-smol")]
+    use futures_lite::stream::StreamExt;
+    #[cfg(feature = "runtime-tokio")]
+    use tokio_stream::StreamExt;
 
     use super::*;
 
