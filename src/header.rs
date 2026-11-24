@@ -799,6 +799,10 @@ impl Header {
     }
 
     #[cfg(target_arch = "wasm32")]
+    #[expect(
+        clippy::unimplemented,
+        reason = "wasm32 has no file metadata to fill a header from"
+    )]
     fn fill_platform_from(&mut self, _meta: &Metadata, _mode: HeaderMode) {
         unimplemented!();
     }

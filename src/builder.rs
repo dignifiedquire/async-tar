@@ -832,6 +832,10 @@ impl<W: Write + Unpin> Drop for Builder<W> {
 
 #[cfg(feature = "runtime-tokio")]
 impl<W: Write + Unpin> Drop for Builder<W> {
+    #[expect(
+        clippy::panic,
+        reason = "tokio cannot finish the archive in drop, and the docs promise a panic instead"
+    )]
     fn drop(&mut self) {
         let is_poisoned = self.obj.as_ref().is_some_and(|output| output.is_poisoned);
         if !self.finished && !is_poisoned && !thread::panicking() && self.obj.is_some() {
