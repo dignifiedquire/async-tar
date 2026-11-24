@@ -1461,12 +1461,17 @@ impl fmt::Debug for GnuSparseHeader {
 
 impl GnuExtSparseHeader {
     /// Crates a new zero'd out sparse header entry.
-    #[expect(
-        unsafe_code,
-        reason = "the header is byte arrays, for which all zeros is valid"
-    )]
     pub fn new() -> Self {
-        unsafe { mem::zeroed() }
+        Self {
+            sparse: [const {
+                GnuSparseHeader {
+                    offset: [0; 12],
+                    numbytes: [0; 12],
+                }
+            }; 21],
+            isextended: [0; 1],
+            padding: [0; 7],
+        }
     }
 
     /// Returns a view into this header as a byte array.
