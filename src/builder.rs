@@ -1,13 +1,19 @@
+#[cfg(feature = "runtime-tokio")]
+use std::thread;
 use std::{
     borrow::Cow,
-    fs::Metadata,
+    fs::{self as std_fs, Metadata},
+    mem,
     path::{Path, PathBuf},
 };
 
 #[cfg(feature = "runtime-smol")]
 use async_fs as fs;
 #[cfg(feature = "runtime-smol")]
-use futures_lite::io::{self, AsyncRead as Read, AsyncReadExt, AsyncWrite as Write, AsyncWriteExt};
+use futures_lite::{
+    future,
+    io::{self, AsyncRead as Read, AsyncReadExt, AsyncWrite as Write, AsyncWriteExt},
+};
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
     fs,
@@ -79,7 +85,7 @@ impl<W: ?Sized> MemberWrite<'_, W> {
     fn end(self) {
         // Forgetting the write skips its drop, so later writes still succeed. It holds
         // only a reference, so nothing leaks.
-        std::mem::forget(self);
+        mem::forget(self);
     }
 }
 
@@ -726,7 +732,7 @@ async fn append_dir_all<W: Write + Unpin + ?Sized>(
             }
         } else if !follow && is_symlink {
             let (stat, link_name) = crate::unblock(move || {
-                Ok((std::fs::symlink_metadata(&src)?, std::fs::read_link(&src)?))
+                Ok((std_fs::symlink_metadata(&src)?, std_fs::read_link(&src)?))
             })
             .await?;
             append_fs(dst, &dest, &stat, &mut io::empty(), mode, Some(&link_name)).await?;
@@ -745,8 +751,8 @@ async fn append_dir_all<W: Write + Unpin + ?Sized>(
 /// Returns a directory's metadata and its children, read in chunks of [`DIR_CHUNK_SIZE`].
 async fn read_dir_children(dir: PathBuf, follow: bool) -> io::Result<(Metadata, Vec<Child>)> {
     let (stat, mut entries, (mut children, mut is_done)) = crate::unblock(move || {
-        let stat = std::fs::metadata(&dir)?;
-        let mut entries = std::fs::read_dir(&dir)?;
+        let stat = std_fs::metadata(&dir)?;
+        let mut entries = std_fs::read_dir(&dir)?;
         let first = read_children(&mut entries, follow)?;
         Ok((stat, entries, first))
     })
@@ -765,7 +771,7 @@ async fn read_dir_children(dir: PathBuf, follow: bool) -> io::Result<(Metadata, 
 }
 
 /// Reads up to [`DIR_CHUNK_SIZE`] children, and returns them with whether none are left.
-fn read_children(entries: &mut std::fs::ReadDir, follow: bool) -> io::Result<(Vec<Child>, bool)> {
+fn read_children(entries: &mut std_fs::ReadDir, follow: bool) -> io::Result<(Vec<Child>, bool)> {
     let mut children = Vec::new();
     for entry in entries.by_ref().take(DIR_CHUNK_SIZE) {
         let entry = entry?;
@@ -773,7 +779,7 @@ fn read_children(entries: &mut std::fs::ReadDir, follow: bool) -> io::Result<(Ve
         let path = entry.path();
         let is_symlink = file_type.is_symlink();
         let is_dir = file_type.is_dir()
-            || (follow && is_symlink && std::fs::metadata(&path).is_ok_and(|m| m.is_dir()));
+            || (follow && is_symlink && std_fs::metadata(&path).is_ok_and(|m| m.is_dir()));
         children.push((path, is_dir, is_symlink));
     }
     let is_done = children.len() < DIR_CHUNK_SIZE;
@@ -783,7 +789,7 @@ fn read_children(entries: &mut std::fs::ReadDir, follow: bool) -> io::Result<(Ve
 /// A file's contents, read whole when small, or the open file to stream.
 enum FileContents {
     Read(Vec<u8>),
-    Open(std::fs::File),
+    Open(std_fs::File),
 }
 
 /// Opens `path` and returns its metadata, reading a regular file of up to one copy chunk whole.
@@ -791,7 +797,7 @@ async fn open_file(path: PathBuf) -> io::Result<(Metadata, FileContents)> {
     use std::io::Read as _;
 
     crate::unblock(move || {
-        let file = std::fs::File::open(&path)?;
+        let file = std_fs::File::open(&path)?;
         let stat = file.metadata()?;
         if !stat.is_file() || stat.len() > crate::COPY_CHUNK_SIZE as u64 {
             return Ok((stat, FileContents::Open(file)));
@@ -807,7 +813,7 @@ async fn open_file(path: PathBuf) -> io::Result<(Metadata, FileContents)> {
 #[cfg(feature = "runtime-smol")]
 impl<W: Write + Unpin> Drop for Builder<W> {
     fn drop(&mut self) {
-        futures_lite::future::block_on(async move {
+        future::block_on(async move {
             let _ = self.finish().await;
         });
     }
@@ -817,7 +823,7 @@ impl<W: Write + Unpin> Drop for Builder<W> {
 impl<W: Write + Unpin> Drop for Builder<W> {
     fn drop(&mut self) {
         let is_poisoned = self.obj.as_ref().is_some_and(|output| output.is_poisoned);
-        if !self.finished && !is_poisoned && !std::thread::panicking() && self.obj.is_some() {
+        if !self.finished && !is_poisoned && !thread::panicking() && self.obj.is_some() {
             panic!("Builder dropped without finalizing; call finish() or into_inner()");
         }
     }
@@ -829,7 +835,7 @@ mod tests {
         cell::RefCell,
         pin::Pin,
         rc::Rc,
-        task::{Context, Poll},
+        task::{Context, Poll, Waker},
     };
 
     #[cfg(feature = "runtime-smol")]
@@ -915,7 +921,7 @@ mod tests {
     )]
     #[cfg_attr(feature = "runtime-tokio", tokio::test)]
     async fn rejected_link_name_leaves_no_long_name() {
-        let meta = std::fs::metadata("Cargo.toml").unwrap();
+        let meta = std_fs::metadata("Cargo.toml").unwrap();
         let path = Path::new("a").join("b".repeat(200));
         let mut dst = Output {
             is_poisoned: false,
@@ -1035,7 +1041,7 @@ mod tests {
             fail_past: Some(0),
             is_stuck: true,
         });
-        let mut cx = Context::from_waker(std::task::Waker::noop());
+        let mut cx = Context::from_waker(Waker::noop());
         let header = member("a", 0);
         {
             let mut append = std::pin::pin!(ar.append(&header, &[][..]));

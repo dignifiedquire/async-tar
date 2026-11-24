@@ -4,7 +4,7 @@ use async_tar::Builder;
 #[cfg(feature = "runtime-smol")]
 use smol::fs::File;
 #[cfg(feature = "runtime-tokio")]
-use tokio::fs::File;
+use tokio::{fs::File, runtime::Runtime};
 
 async fn inner_main() {
     let file = File::create("foo.tar").await.unwrap();
@@ -23,7 +23,5 @@ fn main() {
 
 #[cfg(feature = "runtime-tokio")]
 fn main() {
-    tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(inner_main());
+    Runtime::new().unwrap().block_on(inner_main());
 }

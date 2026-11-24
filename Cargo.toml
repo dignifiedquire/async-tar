@@ -48,6 +48,7 @@ unnameable_types = "warn"
 unreachable_pub = "warn"
 
 [lints.clippy]
+absolute_paths = "warn"
 unused_async = "warn"
 use_self = "warn"
 

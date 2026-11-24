@@ -4,27 +4,33 @@
 //! name as the first argument provided, and then prints the contents of that
 //! file to stdout.
 
+#[cfg(feature = "runtime-smol")]
+use std::io;
 use std::{env::args_os, path::Path};
 
 use async_tar::Archive;
 #[cfg(feature = "runtime-smol")]
 use smol::{
+    Unblock,
     io::{AsyncWriteExt, copy},
     stream::StreamExt,
 };
 #[cfg(feature = "runtime-tokio")]
-use tokio::io::{AsyncWriteExt, copy, stdin, stdout};
+use tokio::{
+    io::{AsyncWriteExt, copy, stdin, stdout},
+    runtime::Runtime,
+};
 #[cfg(feature = "runtime-tokio")]
 use tokio_stream::StreamExt;
 
 #[cfg(feature = "runtime-smol")]
-fn stdin() -> smol::Unblock<std::io::Stdin> {
-    smol::Unblock::new(std::io::stdin())
+fn stdin() -> Unblock<io::Stdin> {
+    Unblock::new(io::stdin())
 }
 
 #[cfg(feature = "runtime-smol")]
-fn stdout() -> smol::Unblock<std::io::Stdout> {
-    smol::Unblock::new(std::io::stdout())
+fn stdout() -> Unblock<io::Stdout> {
+    Unblock::new(io::stdout())
 }
 
 async fn inner_main() {
@@ -49,7 +55,5 @@ fn main() {
 
 #[cfg(feature = "runtime-tokio")]
 fn main() {
-    tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(inner_main());
+    Runtime::new().unwrap().block_on(inner_main());
 }

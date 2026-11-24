@@ -6,6 +6,7 @@ use std::{
     iter, mem,
     path::{Path, PathBuf},
     pin::Pin,
+    str,
     sync::{Arc, Mutex},
     task::{Context, Poll},
 };
@@ -31,7 +32,7 @@ use crate::{
     entry::{EntryFields, EntryIo, SmallFile},
     error::TarError,
     fs_canonicalize, other,
-    pax::pax_extensions,
+    pax::{self, pax_extensions},
     symlink_metadata,
 };
 
@@ -590,7 +591,7 @@ impl<R: Read + Unpin> Entries<R> {
             if is_global && new_fields.pax_extensions.is_none() {
                 ready_err!(Pin::new(&mut *new_fields).poll_read_all(cx, extension_body));
                 let records = mem::take(extension_body);
-                for record in crate::pax::pax_extensions(&records) {
+                for record in pax::pax_extensions(&records) {
                     let record = record.map_err(|_e| other("pax extensions invalid"))?;
                     if matches!(record.key_bytes(), b"size" | b"path" | b"linkpath") {
                         return Poll::Ready(Some(Err(other(
@@ -677,7 +678,7 @@ impl<R: Read + Unpin> Entries<R> {
             // A link's target must be UTF-8.
             let is_target_utf8 = new_fields
                 .link_name_bytes()
-                .is_none_or(|target| std::str::from_utf8(&target).is_ok());
+                .is_none_or(|target| str::from_utf8(&target).is_ok());
             if is_link && !is_target_utf8 {
                 return Poll::Ready(Some(Err(other("a link target that is not UTF-8"))));
             }
@@ -1156,7 +1157,7 @@ impl<R: Read + Unpin> Read for Archive<R> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        into: &mut tokio::io::ReadBuf<'_>,
+        into: &mut io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         let mut lock = self.inner.lock().unwrap();
         let mut inner = Pin::new(&mut *lock);

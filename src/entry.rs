@@ -1,15 +1,14 @@
-#[cfg(unix)]
-use std::fs::Permissions;
 use std::{
     borrow::Cow,
     cmp,
     collections::VecDeque,
     ffi::OsStr,
     fmt,
-    fs::FileTimes,
+    fs::{self as std_fs, FileTimes, OpenOptions},
     marker,
     path::{Component, Path, PathBuf},
     pin::Pin,
+    ptr,
     task::{Context, Poll},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -21,6 +20,8 @@ use futures_core::ready;
 use futures_lite::io::{
     self, AsyncRead as Read, AsyncReadExt, AsyncSeekExt, Error, ErrorKind, SeekFrom,
 };
+#[cfg(unix)]
+use std_fs::Permissions;
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
     fs,
@@ -357,7 +358,7 @@ impl<R: Read + Unpin> Read for Entry<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        into: &mut tokio::io::ReadBuf<'_>,
+        into: &mut io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         Pin::new(&mut self.fields).poll_read(cx, into)
     }
@@ -757,23 +758,17 @@ impl<R: Read + Unpin> EntryFields<R> {
             #[cfg(windows)]
             async fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
                 #[cfg(feature = "runtime-smol")]
-                {
-                    async_fs::windows::symlink_file(src, dst).await
-                }
-                #[cfg(feature = "runtime-tokio")]
-                {
-                    tokio::fs::symlink_file(src, dst).await
-                }
+                use async_fs::windows as fs;
+
+                fs::symlink_file(src, dst).await
             }
 
             #[cfg(any(unix, target_os = "redox"))]
             async fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
                 #[cfg(feature = "runtime-smol")]
-                async_fs::unix::symlink(src, dst).await?;
-                #[cfg(feature = "runtime-tokio")]
-                tokio::fs::symlink(src, dst).await?;
+                use async_fs::unix as fs;
 
-                Ok(())
+                fs::symlink(src, dst).await
             }
         } else if kind.is_metadata() {
             return Ok(Unpacked::Other);
@@ -854,7 +849,7 @@ impl<R: Read + Unpin> EntryFields<R> {
 
         if let Some(mtime) = mtime {
             let times = FileTimes::new().set_accessed(mtime).set_modified(mtime);
-            std::fs::OpenOptions::new()
+            OpenOptions::new()
                 .write(true)
                 .open(dst)
                 .and_then(|file| file.set_times(times))
@@ -1032,7 +1027,7 @@ impl SmallFile {
     }
 
     /// Creates the file's missing parent directories inside `canon_dst`, then writes it.
-    pub(crate) fn unpack_in(&self, canon_dst: &Path) -> io::Result<std::fs::File> {
+    pub(crate) fn unpack_in(&self, canon_dst: &Path) -> io::Result<std_fs::File> {
         if let Some(parent) = self.dst.parent() {
             create_dir_inside(canon_dst, parent)?;
         }
@@ -1042,7 +1037,7 @@ impl SmallFile {
     }
 
     /// Writes the file with its mtime and permissions, replacing anything at its path.
-    fn write(&self) -> io::Result<std::fs::File> {
+    fn write(&self) -> io::Result<std_fs::File> {
         let file = self.write_data().map_err(|e| {
             TarError::new(
                 &format!(
@@ -1068,7 +1063,7 @@ impl SmallFile {
         Ok(file)
     }
 
-    fn write_data(&self) -> io::Result<std::fs::File> {
+    fn write_data(&self) -> io::Result<std_fs::File> {
         use std::io::Write as _;
 
         // A new file is created, unlinking any existing one, since writing in place is attackable.
@@ -1099,7 +1094,7 @@ fn create_missing_dirs(canon_dst: &Path, dir: &Path) -> io::Result<()> {
     let mut dirs_to_create = Vec::new();
 
     // Any error but NotFound, such as a path too long for the OS, ends the walk.
-    while let Err(err) = std::fs::symlink_metadata(ancestor) {
+    while let Err(err) = std_fs::symlink_metadata(ancestor) {
         if err.kind() != ErrorKind::NotFound {
             return Err(err);
         }
@@ -1114,14 +1109,14 @@ fn create_missing_dirs(canon_dst: &Path, dir: &Path) -> io::Result<()> {
         if let Some(parent) = ancestor.parent() {
             validate_inside_dst(canon_dst, parent)?;
         }
-        std::fs::create_dir(ancestor)?;
+        std_fs::create_dir(ancestor)?;
     }
     Ok(())
 }
 
 fn validate_inside_dst(canon_dst: &Path, file_dst: &Path) -> io::Result<()> {
     // Abort if target (canonical) parent is outside of `dst`
-    let canon_parent = std::fs::canonicalize(file_dst).map_err(|err| {
+    let canon_parent = std_fs::canonicalize(file_dst).map_err(|err| {
         Error::new(
             err.kind(),
             format!("{} while canonicalizing {}", err, file_dst.display()),
@@ -1142,7 +1137,7 @@ fn validate_inside_dst(canon_dst: &Path, file_dst: &Path) -> io::Result<()> {
 }
 
 #[cfg(any(unix, target_os = "redox"))]
-fn set_file_perms(file: &std::fs::File, mode: u32, preserve: bool, mask: u32) -> io::Result<()> {
+fn set_file_perms(file: &std_fs::File, mode: u32, preserve: bool, mask: u32) -> io::Result<()> {
     use std::os::unix::prelude::*;
 
     let mode = if preserve { mode } else { mode & 0o777 } & !mask;
@@ -1150,7 +1145,7 @@ fn set_file_perms(file: &std::fs::File, mode: u32, preserve: bool, mask: u32) ->
 }
 
 #[cfg(windows)]
-fn set_file_perms(file: &std::fs::File, mode: u32, _preserve: bool, _mask: u32) -> io::Result<()> {
+fn set_file_perms(file: &std_fs::File, mode: u32, _preserve: bool, _mask: u32) -> io::Result<()> {
     if mode & 0o200 == 0o200 {
         return Ok(());
     }
@@ -1161,7 +1156,7 @@ fn set_file_perms(file: &std::fs::File, mode: u32, _preserve: bool, _mask: u32) 
 
 #[cfg(target_arch = "wasm32")]
 #[allow(unused_variables)]
-fn set_file_perms(file: &std::fs::File, mode: u32, preserve: bool, mask: u32) -> io::Result<()> {
+fn set_file_perms(file: &std_fs::File, mode: u32, preserve: bool, mask: u32) -> io::Result<()> {
     Err(io::Error::other("Not implemented"))
 }
 
@@ -1209,7 +1204,7 @@ impl<R: Read + Unpin> Read for EntryFields<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        into: &mut tokio::io::ReadBuf<'_>,
+        into: &mut io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         loop {
             if self.read_state.is_none() {
@@ -1271,7 +1266,7 @@ impl<R: Read + Unpin> Read for EntryIo<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        into: &mut tokio::io::ReadBuf<'_>,
+        into: &mut io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         match &mut *self {
             Self::Pad(io) => Pin::new(io).poll_read(cx, into),
@@ -1288,15 +1283,10 @@ impl<R: Read + Unpin> Read for EntryIo<R> {
 }
 
 /// Creates `dst` for writing, replacing a file or link already there.
-fn create_new_replacing(dst: &Path) -> io::Result<std::fs::File> {
-    let open = || {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(dst)
-    };
+fn create_new_replacing(dst: &Path) -> io::Result<std_fs::File> {
+    let open = || OpenOptions::new().write(true).create_new(true).open(dst);
     match open() {
-        Err(err) if err.kind() == ErrorKind::AlreadyExists => match std::fs::remove_file(dst) {
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => match std_fs::remove_file(dst) {
             Ok(()) => open(),
             Err(e) if e.kind() == ErrorKind::NotFound => open(),
             Err(e) => Err(e),
@@ -1402,7 +1392,7 @@ fn poll_read_all_internal<R: Read + ?Sized>(
                 g.buf.set_len(capacity);
 
                 let buf = &mut g.buf[g.len..];
-                std::ptr::write_bytes(buf.as_mut_ptr(), 0, buf.len());
+                ptr::write_bytes(buf.as_mut_ptr(), 0, buf.len());
             }
         }
 
@@ -1441,7 +1431,7 @@ fn poll_read_all_internal<R: Read + ?Sized>(
                 g.buf.set_len(capacity);
 
                 let buf = &mut g.buf[g.len..];
-                std::ptr::write_bytes(buf.as_mut_ptr(), 0, buf.len());
+                ptr::write_bytes(buf.as_mut_ptr(), 0, buf.len());
             }
         }
 

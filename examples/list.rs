@@ -2,17 +2,20 @@
 //!
 //! Takes a tarball on stdin and prints out all of the entries inside.
 
+#[cfg(feature = "runtime-smol")]
+use std::io;
+
 use async_tar::Archive;
 #[cfg(feature = "runtime-smol")]
-use smol::stream::StreamExt;
+use smol::{Unblock, stream::StreamExt};
 #[cfg(feature = "runtime-tokio")]
-use tokio::io::stdin;
+use tokio::{io::stdin, runtime::Runtime};
 #[cfg(feature = "runtime-tokio")]
 use tokio_stream::StreamExt;
 
 #[cfg(feature = "runtime-smol")]
-fn stdin() -> smol::Unblock<std::io::Stdin> {
-    smol::Unblock::new(std::io::stdin())
+fn stdin() -> Unblock<io::Stdin> {
+    Unblock::new(io::stdin())
 }
 
 async fn inner_main() {
@@ -31,7 +34,5 @@ fn main() {
 
 #[cfg(feature = "runtime-tokio")]
 fn main() {
-    tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(inner_main());
+    Runtime::new().unwrap().block_on(inner_main());
 }

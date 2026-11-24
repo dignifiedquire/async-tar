@@ -25,12 +25,25 @@ compile_error!(
 #[cfg(not(any(feature = "runtime-smol", feature = "runtime-tokio")))]
 compile_error!("Either `runtime-smol` or `runtime-tokio` feature must be enabled.");
 
-use std::io::Error;
+#[cfg(feature = "runtime-tokio")]
+use std::panic;
+use std::{
+    fs::Metadata,
+    io::Error,
+    path::{Path, PathBuf},
+};
 
+#[cfg(feature = "runtime-smol")]
+use async_fs as fs;
 #[cfg(feature = "runtime-smol")]
 use futures_lite::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 #[cfg(feature = "runtime-tokio")]
-use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::fs;
+#[cfg(feature = "runtime-tokio")]
+use tokio::{
+    io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    task,
+};
 
 pub use crate::{
     archive::{Archive, ArchiveBuilder, Entries, RawEntries},
@@ -79,10 +92,10 @@ where
     T: Send + 'static,
     F: FnOnce() -> io::Result<T> + Send + 'static,
 {
-    match tokio::task::spawn_blocking(f).await {
+    match task::spawn_blocking(f).await {
         Ok(result) => result,
         Err(err) => match err.try_into_panic() {
-            Ok(panic) => std::panic::resume_unwind(panic),
+            Ok(payload) => panic::resume_unwind(payload),
             Err(err) => Err(io::Error::other(err)),
         },
     }
@@ -111,33 +124,14 @@ where
     }
 }
 
-#[cfg(feature = "runtime-smol")]
-pub(crate) async fn fs_canonicalize(
-    path: &std::path::Path,
-) -> futures_lite::io::Result<std::path::PathBuf> {
-    async_fs::canonicalize(path).await
-}
-#[cfg(feature = "runtime-tokio")]
-pub(crate) async fn fs_canonicalize(
-    path: &std::path::Path,
-) -> tokio::io::Result<std::path::PathBuf> {
-    tokio::fs::canonicalize(path).await
+pub(crate) async fn fs_canonicalize(path: &Path) -> io::Result<PathBuf> {
+    fs::canonicalize(path).await
 }
 
-#[cfg(feature = "runtime-smol")]
-async fn symlink_metadata(p: &std::path::Path) -> futures_lite::io::Result<std::fs::Metadata> {
-    async_fs::symlink_metadata(p).await
-}
-#[cfg(feature = "runtime-tokio")]
-async fn symlink_metadata(p: &std::path::Path) -> tokio::io::Result<std::fs::Metadata> {
-    tokio::fs::symlink_metadata(p).await
+async fn symlink_metadata(p: &Path) -> io::Result<Metadata> {
+    fs::symlink_metadata(p).await
 }
 
-#[cfg(feature = "runtime-smol")]
-async fn metadata(p: &std::path::Path) -> futures_lite::io::Result<std::fs::Metadata> {
-    async_fs::metadata(p).await
-}
-#[cfg(feature = "runtime-tokio")]
-async fn metadata(p: &std::path::Path) -> tokio::io::Result<std::fs::Metadata> {
-    tokio::fs::metadata(p).await
+async fn metadata(p: &Path) -> io::Result<Metadata> {
+    fs::metadata(p).await
 }
