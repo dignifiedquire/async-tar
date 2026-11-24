@@ -802,7 +802,7 @@ impl<R: Read + Unpin> EntryFields<R> {
 
         let mut f = async {
             let dst = dst.to_path_buf();
-            let mut f = fs::File::from(crate::unblock(move || create_new_replacing(&dst)).await?);
+            let mut f = fs::File::from(crate::unblock(move || create_or_replace(&dst)).await?);
             for io in self.data.drain(..) {
                 match io {
                     EntryIo::Data(mut d) => {
@@ -1049,7 +1049,7 @@ impl SmallFile {
         use std::io::Write as _;
 
         // A new file is created, unlinking any existing one, since writing in place is attackable.
-        let mut file = create_new_replacing(&self.dst)?;
+        let mut file = create_or_replace(&self.dst)?;
         file.write_all(&self.data)?;
         if let Some(mtime) = self.mtime {
             let times = FileTimes::new().set_accessed(mtime).set_modified(mtime);
@@ -1264,7 +1264,7 @@ impl<R: Read + Unpin> Read for EntryIo<R> {
 }
 
 /// Creates `dst` for writing, replacing a file or link already there.
-fn create_new_replacing(dst: &Path) -> io::Result<std_fs::File> {
+fn create_or_replace(dst: &Path) -> io::Result<std_fs::File> {
     let open = || OpenOptions::new().write(true).create_new(true).open(dst);
     match open() {
         Err(err) if err.kind() == ErrorKind::AlreadyExists => match std_fs::remove_file(dst) {

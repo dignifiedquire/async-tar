@@ -1678,7 +1678,7 @@ struct PendingReader<'a> {
 }
 
 impl PendingReader<'_> {
-    fn poll_pending(&mut self, cx: &mut Context<'_>) -> bool {
+    fn toggle_pending(&mut self, cx: &mut Context<'_>) -> bool {
         self.is_pending = !self.is_pending;
         if self.is_pending {
             cx.waker().wake_by_ref();
@@ -1694,7 +1694,7 @@ impl Read for PendingReader<'_> {
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        if self.poll_pending(cx) {
+        if self.toggle_pending(cx) {
             return Poll::Pending;
         }
         let n = buf.len().min(self.data.len()).min(7);
@@ -1711,7 +1711,7 @@ impl Read for PendingReader<'_> {
         cx: &mut Context<'_>,
         buf: &mut io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        if self.poll_pending(cx) {
+        if self.toggle_pending(cx) {
             return Poll::Pending;
         }
         let n = buf.remaining().min(self.data.len()).min(7);
