@@ -15,13 +15,13 @@ use async_fs as fs;
 use futures_core::ready;
 #[cfg(feature = "runtime-smol")]
 use futures_lite::{
-    io::{self, AsyncRead as Read, AsyncReadExt},
+    io::{self, AsyncRead as Read, AsyncReadExt, AsyncSeek as Seek},
     stream::{Stream, StreamExt},
 };
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
     fs,
-    io::{self, AsyncRead as Read, AsyncReadExt},
+    io::{self, AsyncRead as Read, AsyncReadExt, AsyncSeek as Seek},
 };
 #[cfg(feature = "runtime-tokio")]
 use tokio_stream::{Stream, StreamExt};
@@ -40,6 +40,10 @@ const MAX_BATCH_FILES: usize = 256;
 
 /// The most data `Archive::unpack` holds before writing its small files.
 const MAX_BATCH_BYTES: usize = 1024 * 1024;
+
+/// The most data `Archive::entries_with_seek` skips by reading it.
+// Under smol, reading cached data beats a seek below about 512 KiB.
+const MAX_SKIP_READ_BYTES: u64 = 2 * 1024 * 1024;
 
 /// A top-level representation of an archive file.
 ///
@@ -61,6 +65,9 @@ impl<R: Read + Unpin> Clone for Archive<R> {
     }
 }
 
+/// Seeks an archive's reader forward.
+type SeekForward<R> = fn(&mut ArchiveInner<R>, &mut Context<'_>, u64) -> Poll<io::Result<()>>;
+
 #[derive(Debug)]
 pub(crate) struct ArchiveInner<R: Read + Unpin> {
     pos: u64,
@@ -74,6 +81,10 @@ pub(crate) struct ArchiveInner<R: Read + Unpin> {
     max_gnu_extension_size: u64,
     max_gnu_sparse_map_size: u64,
     global_pax_extensions_size: u64,
+    // Only `entries_with_seek` knows that `R` can seek, so it stores the seek here.
+    seek_forward: Option<SeekForward<R>>,
+    #[cfg(feature = "runtime-tokio")]
+    is_seeking: bool,
     obj: R,
 }
 
@@ -218,6 +229,9 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
                 max_gnu_extension_size,
                 max_gnu_sparse_map_size,
                 global_pax_extensions_size: 0,
+                seek_forward: None,
+                #[cfg(feature = "runtime-tokio")]
+                is_seeking: false,
                 obj,
                 pos: 0,
             })),
@@ -377,6 +391,31 @@ impl<R: Read + Unpin> Archive<R> {
         }
 
         Ok(())
+    }
+
+    /// Seeks over `amt` bytes where `entries_with_seek` allows it, and reads past the rest.
+    fn poll_seek_or_skip(&self, cx: &mut Context<'_>, mut amt: u64) -> Poll<io::Result<()>> {
+        // The seek leaves the last byte to read, so a truncated archive fails here.
+        let seek_amt = amt.saturating_sub(1);
+        let mut inner = self.lock()?;
+        if let Some(seek_forward) = inner
+            .seek_forward
+            .filter(|_| seek_amt > MAX_SKIP_READ_BYTES)
+        {
+            ready!(seek_forward(&mut inner, cx, seek_amt))?;
+            amt -= seek_amt;
+        }
+        drop(inner);
+        poll_skip(self.clone(), cx, amt)
+    }
+}
+
+impl<R: Read + Seek + Unpin> Archive<R> {
+    /// Constructs a stream like [`Archive::entries`] that seeks over large unread data.
+    pub fn entries_with_seek(self) -> io::Result<Entries<R>> {
+        let entries = self.entries()?;
+        entries.archive.lock()?.seek_forward = Some(poll_seek_forward::<R>);
+        Ok(entries)
     }
 }
 
@@ -779,7 +818,7 @@ fn poll_next_raw<R: Read + Unpin>(
             None => {
                 // Seek to the start of the next header in the archive
                 let delta = *next - archive.lock()?.pos;
-                match ready!(poll_skip(archive.clone(), cx, delta)) {
+                match ready!(archive.poll_seek_or_skip(cx, delta)) {
                     Ok(_) => {}
                     Err(err) => return Poll::Ready(Some(Err(err))),
                 }
@@ -1302,6 +1341,39 @@ fn poll_skip<R: Read + Unpin>(
         }
     }
 
+    Poll::Ready(Ok(()))
+}
+
+/// Seeks `amt` bytes forward.
+#[cfg(feature = "runtime-smol")]
+fn poll_seek_forward<R: Read + Seek + Unpin>(
+    inner: &mut ArchiveInner<R>,
+    cx: &mut Context<'_>,
+    amt: u64,
+) -> Poll<io::Result<()>> {
+    let offset = i64::try_from(amt).map_err(|_| other("seek offset out of range"))?;
+    ready!(Pin::new(&mut inner.obj).poll_seek(cx, io::SeekFrom::Current(offset)))?;
+    inner.pos += amt;
+    Poll::Ready(Ok(()))
+}
+
+/// Seeks `amt` bytes forward.
+#[cfg(feature = "runtime-tokio")]
+fn poll_seek_forward<R: Read + Seek + Unpin>(
+    inner: &mut ArchiveInner<R>,
+    cx: &mut Context<'_>,
+    amt: u64,
+) -> Poll<io::Result<()>> {
+    // A second `start_seek` before the first completes would seek twice.
+    if !inner.is_seeking {
+        let offset = i64::try_from(amt).map_err(|_| other("seek offset out of range"))?;
+        Pin::new(&mut inner.obj).start_seek(io::SeekFrom::Current(offset))?;
+        inner.is_seeking = true;
+    }
+    let result = ready!(Pin::new(&mut inner.obj).poll_complete(cx));
+    inner.is_seeking = false;
+    result?;
+    inner.pos += amt;
     Poll::Ready(Ok(()))
 }
 

@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     str,
-    task::{Context, Poll},
+    task::{Context, Poll, ready},
     time::{Duration, UNIX_EPOCH},
 };
 
@@ -16,14 +16,20 @@ use async_tar::{
 #[cfg(feature = "runtime-smol")]
 use smol::{
     fs::{self, File},
-    io::{self, AsyncRead as Read, AsyncReadExt, AsyncWrite as Write, AsyncWriteExt},
+    io::{
+        self, AsyncRead as Read, AsyncReadExt, AsyncSeek as Seek, AsyncWrite as Write,
+        AsyncWriteExt,
+    },
     stream::StreamExt,
 };
 use tempfile::{Builder as TempBuilder, TempDir};
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
     fs::{self, File},
-    io::{self, AsyncRead as Read, AsyncReadExt, AsyncWrite as Write, AsyncWriteExt},
+    io::{
+        self, AsyncRead as Read, AsyncReadExt, AsyncSeek as Seek, AsyncWrite as Write,
+        AsyncWriteExt,
+    },
 };
 #[cfg(feature = "runtime-tokio")]
 use tokio_stream::StreamExt;
@@ -1672,6 +1678,7 @@ async fn sparse_maps_extend_on_any_nonzero_flag() {
     assert_eq!(entries, [(b"sparse".to_vec(), vec![b'A'; BLOCK])]);
 }
 
+#[derive(Debug)]
 struct PendingReader<'a> {
     data: &'a [u8],
     is_pending: bool,
@@ -1751,6 +1758,149 @@ async fn pending_reads_do_not_change_entries() {
         assert_eq!(read_entries(reader).await, expected);
     }
     assert_eq!(read_entries(&long_sparse[..]).await[0].0, name.as_bytes());
+}
+
+#[derive(Debug)]
+struct SeekReader<'a> {
+    reader: PendingReader<'a>,
+    len: usize,
+    bytes_read: usize,
+    seeks: usize,
+}
+
+impl<'a> SeekReader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self {
+            reader: PendingReader {
+                data,
+                is_pending: false,
+            },
+            len: data.len(),
+            bytes_read: 0,
+            seeks: 0,
+        }
+    }
+
+    fn seek_forward(&mut self, pos: io::SeekFrom) -> io::Result<u64> {
+        let io::SeekFrom::Current(offset) = pos else {
+            return Err(io::Error::other("only forward seeks are supported"));
+        };
+        let offset = usize::try_from(offset).map_err(io::Error::other)?;
+        self.seeks += 1;
+        self.reader.data = self.reader.data.get(offset..).unwrap_or_default();
+        Ok((self.len - self.reader.data.len()) as u64)
+    }
+}
+
+#[cfg(feature = "runtime-smol")]
+impl Read for SeekReader<'_> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        let n = ready!(Pin::new(&mut self.reader).poll_read(cx, buf))?;
+        self.bytes_read += n;
+        Poll::Ready(Ok(n))
+    }
+}
+
+#[cfg(feature = "runtime-tokio")]
+impl Read for SeekReader<'_> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let start = buf.filled().len();
+        ready!(Pin::new(&mut self.reader).poll_read(cx, buf))?;
+        self.bytes_read += buf.filled().len() - start;
+        Poll::Ready(Ok(()))
+    }
+}
+
+#[cfg(feature = "runtime-smol")]
+impl Seek for SeekReader<'_> {
+    fn poll_seek(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        pos: io::SeekFrom,
+    ) -> Poll<io::Result<u64>> {
+        if self.reader.toggle_pending(cx) {
+            return Poll::Pending;
+        }
+        Poll::Ready(self.seek_forward(pos))
+    }
+}
+
+#[cfg(feature = "runtime-tokio")]
+impl Seek for SeekReader<'_> {
+    fn start_seek(mut self: Pin<&mut Self>, pos: io::SeekFrom) -> io::Result<()> {
+        self.seek_forward(pos).map(drop)
+    }
+
+    fn poll_complete(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<u64>> {
+        if self.reader.toggle_pending(cx) {
+            return Poll::Pending;
+        }
+        Poll::Ready(Ok((self.len - self.reader.data.len()) as u64))
+    }
+}
+
+async fn setup_tar(files: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut builder = Builder::new(Vec::new());
+    for (path, data) in files {
+        let mut header = Header::new_gnu();
+        header.set_size(data.len() as u64);
+        t!(builder.append_data(&mut header, path, *data).await);
+    }
+    t!(builder.into_inner().await)
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn entries_with_seek_seeks_over_unread_data() {
+    let big = vec![b'b'; 4 * 1024 * 1024];
+    let tar = setup_tar(&[("big1", &big), ("small", b"small"), ("big2", &big)]).await;
+
+    let archive = Archive::new(SeekReader::new(&tar));
+    let mut entries = t!(archive.clone().entries_with_seek());
+    let mut listed = Vec::new();
+    while let Some(entry) = entries.next().await {
+        let mut entry = t!(entry);
+        let mut data = Vec::new();
+        if t!(entry.header().size()) < 1024 {
+            t!(entry.read_to_end(&mut data).await);
+        }
+        listed.push((entry.path_bytes().into_owned(), data));
+    }
+    drop(entries);
+
+    let expected = [
+        (b"big1".to_vec(), Vec::new()),
+        (b"small".to_vec(), b"small".to_vec()),
+        (b"big2".to_vec(), Vec::new()),
+    ];
+    assert_eq!(listed, expected);
+    let reader = archive.into_inner().unwrap();
+    assert!(
+        reader.bytes_read < 64 * 1024,
+        "read {} bytes",
+        reader.bytes_read
+    );
+    assert_eq!(reader.seeks, 2);
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn entries_with_seek_fails_on_a_truncated_archive() {
+    let big = vec![b'b'; 4 * 1024 * 1024];
+    let tar = setup_tar(&[("big", &big), ("after", b"after")]).await;
+
+    let reader = SeekReader::new(&tar[..tar.len() / 2]);
+    let mut entries = t!(Archive::new(reader).entries_with_seek());
+    t!(entries.next().await.unwrap());
+    assert!(matches!(entries.next().await, Some(Err(_))));
 }
 
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
