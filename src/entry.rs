@@ -8,10 +8,10 @@ use std::{
     fmt,
     fs::FileTimes,
     marker,
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
     pin::Pin,
     task::{Context, Poll},
-    time::{Duration, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(feature = "runtime-smol")]
@@ -468,6 +468,54 @@ impl<R: Read + Unpin> EntryFields<R> {
             return Ok(true);
         }
 
+        let Some(file_dst) = self.join_path(dst)? else {
+            return Ok(false);
+        };
+
+        // A name of only slashes, `.` parts and drive prefixes joins to `dst` itself,
+        // so nothing is unpacked.
+        if *dst == *file_dst {
+            return Ok(true);
+        }
+
+        // Skip entries without a parent (i.e. outside of FS root)
+        let parent = match file_dst.parent() {
+            Some(p) => p,
+            None => return Ok(false),
+        };
+
+        let canon_dst = match canon_dst {
+            Some(canon_dst) => canon_dst.to_path_buf(),
+            None => fs_canonicalize(dst).await.map_err(|err| {
+                Error::new(
+                    err.kind(),
+                    format!("{} while canonicalizing {}", err, dst.display()),
+                )
+            })?,
+        };
+
+        if !self.unpack_xattrs {
+            let small = self.read_small_file(&file_dst).await.map_err(|e| {
+                TarError::new(&format!("failed to unpack `{}`", file_dst.display()), e)
+            })?;
+            if let Some(small) = small {
+                crate::unblock(move || small.unpack_in(&canon_dst)).await?;
+                return Ok(true);
+            }
+        }
+
+        let (canon, dir) = (canon_dst.clone(), parent.to_path_buf());
+        crate::unblock(move || create_dir_inside(&canon, &dir)).await?;
+
+        self.unpack(Some(&canon_dst), &file_dst)
+            .await
+            .map_err(|e| TarError::new(&format!("failed to unpack `{}`", file_dst.display()), e))?;
+
+        Ok(true)
+    }
+
+    /// Joins this entry's path to `dst`, returning `None` for a path with a `..` component.
+    fn join_path(&self, dst: &Path) -> io::Result<Option<PathBuf>> {
         // Notes regarding bsdtar 2.8.3 / libarchive 2.8.3:
         // * Leading '/'s are trimmed. For example, `///test` is treated as
         //   `test`.
@@ -500,7 +548,7 @@ impl<R: Read + Unpin> EntryFields<R> {
                     // unpacking the file to prevent directory traversal
                     // security issues.  See, e.g.: CVE-2001-1267,
                     // CVE-2002-0399, CVE-2005-1918, CVE-2007-4131
-                    Component::ParentDir => return Ok(false),
+                    Component::ParentDir => return Ok(None),
 
                     Component::Normal(part) if is_windows_reserved(part) => {
                         return Err(other(&format!(
@@ -513,40 +561,67 @@ impl<R: Read + Unpin> EntryFields<R> {
                 }
             }
         }
+        Ok(Some(file_dst))
+    }
 
-        // Skip cases where only slashes or '.' parts were seen, because
-        // this is effectively an empty filename.
-        if *dst == *file_dst {
-            return Ok(true);
+    /// Reads this entry as a small regular file to write at `dst`.
+    ///
+    /// Returns `None`, reading nothing, for any other entry.
+    async fn read_small_file(&mut self, dst: &Path) -> io::Result<Option<SmallFile>> {
+        let kind = self.header.entry_type();
+        if kind.is_dir() || kind.is_hard_link() || kind.is_symlink() || kind.is_metadata() {
+            return Ok(None);
+        }
+        // A name ending in a slash in an old header is a directory, as in `unpack`.
+        if self.header.as_ustar().is_none() && self.path_bytes().ends_with(b"/") {
+            return Ok(None);
+        }
+        let mut data = match self.data.front() {
+            Some(EntryIo::Data(d))
+                if self.data.len() == 1 && d.limit() <= COPY_CHUNK_SIZE as u64 =>
+            {
+                match self.data.pop_front() {
+                    Some(EntryIo::Data(d)) => d,
+                    _ => return Ok(None),
+                }
+            }
+            _ => return Ok(None),
+        };
+
+        let name = String::from_utf8_lossy(&self.header.path_bytes()).into_owned();
+        let expected = data.limit();
+        let mut bytes = Vec::with_capacity(expected as usize);
+        let read = data.read_to_end(&mut bytes).await.and_then(|n| {
+            if n as u64 == expected {
+                Ok(())
+            } else {
+                Err(other("failed to write entire file"))
+            }
+        });
+        if let Err(err) = read {
+            return Err(TarError::new(
+                &format!("failed to unpack `{}` into `{}`", name, dst.display()),
+                err,
+            )
+            .into());
         }
 
-        // Skip entries without a parent (i.e. outside of FS root)
-        let parent = match file_dst.parent() {
-            Some(p) => p,
-            None => return Ok(false),
-        };
-
-        let canon_dst = match canon_dst {
-            Some(canon_dst) => Cow::Borrowed(canon_dst),
-            None => Cow::Owned(fs_canonicalize(dst).await.map_err(|err| {
-                Error::new(
-                    err.kind(),
-                    format!("{} while canonicalizing {}", err, dst.display()),
-                )
-            })?),
-        };
-
-        self.ensure_dir_created(&canon_dst, parent)
-            .await
-            .map_err(|e| TarError::new(&format!("failed to create `{}`", parent.display()), e))?;
-
-        self.validate_inside_dst(&canon_dst, parent).await?;
-
-        self.unpack(Some(&canon_dst), &file_dst)
-            .await
-            .map_err(|e| TarError::new(&format!("failed to unpack `{}`", file_dst.display()), e))?;
-
-        Ok(true)
+        // An mtime beyond the range of `SystemTime` stays unset.
+        let mtime = self
+            .header
+            .mtime()
+            .ok()
+            .and_then(|mtime| UNIX_EPOCH.checked_add(Duration::from_secs(mtime)))
+            .filter(|_| self.preserve_mtime);
+        Ok(Some(SmallFile {
+            dst: dst.to_path_buf(),
+            name,
+            data: bytes,
+            mtime,
+            mode: self.header.mode().ok(),
+            preserve_permissions: self.preserve_permissions,
+            mask: self.mask,
+        }))
     }
 
     /// Unpack as destination directory `dst`.
@@ -613,7 +688,8 @@ impl<R: Read + Unpin> EntryFields<R> {
                     // so we need to validate at this time.
                     Some(p) => {
                         let link_src = p.join(src);
-                        self.validate_inside_dst(p, &link_src).await?;
+                        let (canon_dst, path) = (p.to_path_buf(), link_src.clone());
+                        crate::unblock(move || validate_inside_dst(&canon_dst, &path)).await?;
                         link_src
                     }
                     None => src.into_owned(),
@@ -695,6 +771,15 @@ impl<R: Read + Unpin> EntryFields<R> {
         // As a result if we don't recognize the kind we just write out the file
         // as we would normally.
 
+        // A small file is read from the archive first, then written in one blocking call.
+        if let Some(small) = self.read_small_file(dst).await? {
+            let file = crate::unblock(move || small.write()).await?;
+            if self.unpack_xattrs {
+                set_xattrs(self, dst).await?;
+            }
+            return Ok(Unpacked::File(fs::File::from(file)));
+        }
+
         // Ensure we write a new file rather than overwriting in-place which
         // is attackable; if an existing file is found unlink it.
         // An mtime beyond the range of `SystemTime` stays unset.
@@ -705,45 +790,7 @@ impl<R: Read + Unpin> EntryFields<R> {
             .and_then(|mtime| UNIX_EPOCH.checked_add(Duration::from_secs(mtime)))
             .filter(|_| self.preserve_mtime);
 
-        // A small file is read from the archive first, then created, written and
-        // given its mtime in one blocking call.
-        let small = match self.data.front() {
-            Some(EntryIo::Data(d))
-                if self.data.len() == 1 && d.limit() <= COPY_CHUNK_SIZE as u64 =>
-            {
-                self.data.pop_front()
-            }
-            _ => None,
-        };
-        let is_small = small.is_some();
         let mut f = async {
-            if let Some(EntryIo::Data(mut d)) = small {
-                let expected = d.limit();
-                let mut data = Vec::with_capacity(expected as usize);
-                if d.read_to_end(&mut data).await? as u64 != expected {
-                    return Err(other("failed to write entire file"));
-                }
-                let dst = dst.to_path_buf();
-                let file = crate::unblock(move || {
-                    use std::io::Write as _;
-
-                    let mut file = create_new_replacing(&dst)?;
-                    file.write_all(&data)?;
-                    if let Some(mtime) = mtime {
-                        let times = FileTimes::new().set_accessed(mtime).set_modified(mtime);
-                        file.set_times(times).map_err(|e| {
-                            Error::new(
-                                e.kind(),
-                                format!("{e} when setting the mtime of `{}`", dst.display()),
-                            )
-                        })?;
-                    }
-                    Ok(file)
-                })
-                .await?;
-                return Ok(fs::File::from(file));
-            }
-
             let dst = dst.to_path_buf();
             let mut f = fs::File::from(crate::unblock(move || create_new_replacing(&dst)).await?);
             for io in self.data.drain(..) {
@@ -777,7 +824,7 @@ impl<R: Read + Unpin> EntryFields<R> {
             )
         })?;
 
-        if let Some(mtime) = mtime.filter(|_| !is_small) {
+        if let Some(mtime) = mtime {
             let times = FileTimes::new().set_accessed(mtime).set_modified(mtime);
             std::fs::OpenOptions::new()
                 .write(true)
@@ -933,53 +980,152 @@ impl<R: Read + Unpin> EntryFields<R> {
             Ok(())
         }
     }
+}
 
-    async fn ensure_dir_created(&self, canon_dst: &Path, dir: &Path) -> io::Result<()> {
-        let mut ancestor = dir;
-        let mut dirs_to_create = Vec::new();
+/// A regular file small enough to unpack from memory in one blocking call.
+pub(crate) struct SmallFile {
+    dst: PathBuf,
+    name: String,
+    data: Vec<u8>,
+    mtime: Option<SystemTime>,
+    mode: Option<u32>,
+    preserve_permissions: bool,
+    mask: u32,
+}
 
-        // Any error but NotFound, such as a path too long for the OS, ends the walk.
-        while let Err(err) = symlink_metadata(ancestor).await {
-            if err.kind() != ErrorKind::NotFound {
-                return Err(err);
-            }
-            dirs_to_create.push(ancestor);
-            if let Some(parent) = ancestor.parent() {
-                ancestor = parent;
-            } else {
-                break;
-            }
+impl SmallFile {
+    /// Creates the file's missing parent directories inside `canon_dst`, then writes it.
+    pub(crate) fn unpack_in(&self, canon_dst: &Path) -> io::Result<std::fs::File> {
+        if let Some(parent) = self.dst.parent() {
+            create_dir_inside(canon_dst, parent)?;
         }
-        for ancestor in dirs_to_create.into_iter().rev() {
-            if let Some(parent) = ancestor.parent() {
-                self.validate_inside_dst(canon_dst, parent).await?;
-            }
-            fs::create_dir(ancestor).await?;
-        }
-        Ok(())
+        self.write().map_err(|e| {
+            TarError::new(&format!("failed to unpack `{}`", self.dst.display()), e).into()
+        })
     }
 
-    async fn validate_inside_dst(&self, canon_dst: &Path, file_dst: &Path) -> io::Result<()> {
-        // Abort if target (canonical) parent is outside of `dst`
-        let canon_parent = fs_canonicalize(file_dst).await.map_err(|err| {
-            Error::new(
-                err.kind(),
-                format!("{} while canonicalizing {}", err, file_dst.display()),
+    /// Writes the file with its mtime and permissions, replacing anything at its path.
+    fn write(&self) -> io::Result<std::fs::File> {
+        let file = self.write_data().map_err(|e| {
+            TarError::new(
+                &format!(
+                    "failed to unpack `{}` into `{}`",
+                    self.name,
+                    self.dst.display()
+                ),
+                e,
             )
         })?;
-        if !canon_parent.starts_with(canon_dst) {
-            let err = TarError::new(
-                &format!(
-                    "trying to unpack outside of destination path: {}",
-                    canon_dst.display()
-                ),
-                // TODO: use ErrorKind::InvalidInput here? (minor breaking change)
-                Error::other("Invalid argument"),
-            );
-            return Err(err.into());
+        if let Some(mode) = self.mode {
+            set_file_perms(&file, mode, self.preserve_permissions, self.mask).map_err(|e| {
+                TarError::new(
+                    &format!(
+                        "failed to set permissions to {:o} for `{}`",
+                        mode,
+                        self.dst.display()
+                    ),
+                    e,
+                )
+            })?;
         }
-        Ok(())
+        Ok(file)
     }
+
+    fn write_data(&self) -> io::Result<std::fs::File> {
+        use std::io::Write as _;
+
+        // A new file is created, unlinking any existing one, since writing in place is attackable.
+        let mut file = create_new_replacing(&self.dst)?;
+        file.write_all(&self.data)?;
+        if let Some(mtime) = self.mtime {
+            let times = FileTimes::new().set_accessed(mtime).set_modified(mtime);
+            file.set_times(times).map_err(|e| {
+                Error::new(
+                    e.kind(),
+                    format!("{e} when setting the mtime of `{}`", self.dst.display()),
+                )
+            })?;
+        }
+        Ok(file)
+    }
+}
+
+/// Creates `dir` and its missing ancestors, and checks each resolves inside `canon_dst`.
+fn create_dir_inside(canon_dst: &Path, dir: &Path) -> io::Result<()> {
+    create_missing_dirs(canon_dst, dir)
+        .map_err(|e| TarError::new(&format!("failed to create `{}`", dir.display()), e))?;
+    validate_inside_dst(canon_dst, dir)
+}
+
+fn create_missing_dirs(canon_dst: &Path, dir: &Path) -> io::Result<()> {
+    let mut ancestor = dir;
+    let mut dirs_to_create = Vec::new();
+
+    // Any error but NotFound, such as a path too long for the OS, ends the walk.
+    while let Err(err) = std::fs::symlink_metadata(ancestor) {
+        if err.kind() != ErrorKind::NotFound {
+            return Err(err);
+        }
+        dirs_to_create.push(ancestor);
+        if let Some(parent) = ancestor.parent() {
+            ancestor = parent;
+        } else {
+            break;
+        }
+    }
+    for ancestor in dirs_to_create.into_iter().rev() {
+        if let Some(parent) = ancestor.parent() {
+            validate_inside_dst(canon_dst, parent)?;
+        }
+        std::fs::create_dir(ancestor)?;
+    }
+    Ok(())
+}
+
+fn validate_inside_dst(canon_dst: &Path, file_dst: &Path) -> io::Result<()> {
+    // Abort if target (canonical) parent is outside of `dst`
+    let canon_parent = std::fs::canonicalize(file_dst).map_err(|err| {
+        Error::new(
+            err.kind(),
+            format!("{} while canonicalizing {}", err, file_dst.display()),
+        )
+    })?;
+    if !canon_parent.starts_with(canon_dst) {
+        let err = TarError::new(
+            &format!(
+                "trying to unpack outside of destination path: {}",
+                canon_dst.display()
+            ),
+            // TODO: use ErrorKind::InvalidInput here? (minor breaking change)
+            Error::other("Invalid argument"),
+        );
+        return Err(err.into());
+    }
+    Ok(())
+}
+
+#[cfg(any(unix, target_os = "redox"))]
+fn set_file_perms(file: &std::fs::File, mode: u32, preserve: bool, mask: u32) -> io::Result<()> {
+    use std::os::unix::prelude::*;
+
+    let mode = if preserve { mode } else { mode & 0o777 } & !mask;
+    file.set_permissions(Permissions::from_mode(mode as _))
+}
+
+#[cfg(windows)]
+fn set_file_perms(file: &std::fs::File, mode: u32, _preserve: bool, _mask: u32) -> io::Result<()> {
+    if mode & 0o200 == 0o200 {
+        return Ok(());
+    }
+    let mut perm = file.metadata()?.permissions();
+    perm.set_readonly(true);
+    file.set_permissions(perm)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[allow(unused_variables)]
+fn set_file_perms(file: &std::fs::File, mode: u32, preserve: bool, mask: u32) -> io::Result<()> {
+    Err(io::Error::new(io::ErrorKind::Other, "Not implemented"))
 }
 
 #[cfg(feature = "runtime-smol")]
