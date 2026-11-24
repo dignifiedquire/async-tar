@@ -24,6 +24,7 @@ blocking = { version = "1.6", optional = true }
 tokio = { version = "1.49", optional = true, features = ["fs", "io-util", "rt"] }
 tokio-stream = { version = "0.1.18", features = ["fs"], optional = true }
 futures-core = "0.3.31"
+zerocopy = { version = "0.8", features = ["derive"] }
 
 [dev-dependencies]
 macro_rules_attribute = "0.2"
@@ -44,6 +45,9 @@ redox_syscall = "0.9"
 elided_lifetimes_in_paths = "warn"
 missing_debug_implementations = "warn"
 missing_docs = "warn"
+# zerocopy's FromBytes derive names its helpers with a non-ASCII letter, which
+# nightly flags. The lint accepts a level only for the whole crate.
+uncommon_codepoints = "allow"
 unnameable_types = "warn"
 unreachable_pub = "warn"
 unsafe_code = "deny"
