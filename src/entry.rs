@@ -746,8 +746,12 @@ impl<R: Read + Unpin> EntryFields<R> {
 
             #[cfg(target_arch = "wasm32")]
             #[allow(unused_variables)]
+            #[expect(
+                clippy::unused_async,
+                reason = "keeps the signature of the other platforms"
+            )]
             async fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
-                Err(io::Error::new(io::ErrorKind::Other, "Not implemented"))
+                Err(io::Error::other("Not implemented"))
             }
 
             #[cfg(windows)]
@@ -938,6 +942,10 @@ impl<R: Read + Unpin> EntryFields<R> {
 
         #[cfg(target_arch = "wasm32")]
         #[allow(unused_variables)]
+        #[expect(
+            clippy::unused_async,
+            reason = "keeps the signature of the other platforms"
+        )]
         async fn _set_perms(
             dst: &Path,
             f: Option<&mut fs::File>,
@@ -945,7 +953,7 @@ impl<R: Read + Unpin> EntryFields<R> {
             _preserve: bool,
             _mask: u32,
         ) -> io::Result<()> {
-            Err(io::Error::new(io::ErrorKind::Other, "Not implemented"))
+            Err(io::Error::other("Not implemented"))
         }
 
         #[cfg(all(unix, feature = "xattr"))]
@@ -1154,7 +1162,7 @@ fn set_file_perms(file: &std::fs::File, mode: u32, _preserve: bool, _mask: u32) 
 #[cfg(target_arch = "wasm32")]
 #[allow(unused_variables)]
 fn set_file_perms(file: &std::fs::File, mode: u32, preserve: bool, mask: u32) -> io::Result<()> {
-    Err(io::Error::new(io::ErrorKind::Other, "Not implemented"))
+    Err(io::Error::other("Not implemented"))
 }
 
 #[cfg(feature = "runtime-smol")]
