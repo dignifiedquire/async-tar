@@ -415,7 +415,7 @@ impl<R: Read + Unpin> EntryFields<R> {
 
     pub(crate) fn pax_value(&self, key: &[u8]) -> Option<&[u8]> {
         let pax = self.pax_extensions.as_ref()?;
-        // POSIX gives the last of repeated records precedence, as GNU tar does.
+        // The last of repeated records wins, as POSIX specifies and GNU tar does.
         pax_extensions(pax)
             .filter_map(Result::ok)
             .filter(|f| f.key_bytes() == key)
