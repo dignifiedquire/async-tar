@@ -3,6 +3,71 @@
 All notable changes to async-tar will be documented in this file.
 
 <!-- git-cliff: end of header -->
+## [0.7.0](https://github.com/dignifiedquire/async-tar/compare/v0.6.2..v0.7.0) - 2026-11-24
+
+### ⛰️  Features
+
+- [**breaking**] Replace async-std with smol ([#91](https://github.com/dignifiedquire/async-tar/issues/91)) - ([01a7bb3](https://github.com/dignifiedquire/async-tar/commit/01a7bb3827035868f052076e554018120f94d05d))
+- Make the extension header and sparse map limits configurable - ([b51a3dd](https://github.com/dignifiedquire/async-tar/commit/b51a3dd3ad8a14700e1bb4c3304e222935e70910))
+
+### 🐛 Bug Fixes
+
+- [**breaking**] Drop the Send and Sync bounds on Builder ([#87](https://github.com/dignifiedquire/async-tar/issues/87)) - ([ef50a03](https://github.com/dignifiedquire/async-tar/commit/ef50a03db783045b3bacf05cc8e187f711729bce))
+- [**breaking**] Reject ambiguous tar archives ([#94](https://github.com/dignifiedquire/async-tar/issues/94)) - ([fd3ab9b](https://github.com/dignifiedquire/async-tar/commit/fd3ab9bdbbb7d7cc369d053c2737db4b00e11a8b))
+- End pax records at a NUL - ([299603f](https://github.com/dignifiedquire/async-tar/commit/299603f595a4c55fe873de849925d42c4a5538fd))
+- Reject member sizes beyond i64::MAX - ([60010e7](https://github.com/dignifiedquire/async-tar/commit/60010e7554b63d6f616519f00cecbe90a2974129))
+- Reject a name ending in a slash on a member with data - ([40b7c64](https://github.com/dignifiedquire/async-tar/commit/40b7c6400af7a6d3c310fdb5dd97fd9c7f0b6d46))
+- Cap GNU long names and pax headers at 1 MiB - ([7a45bf4](https://github.com/dignifiedquire/async-tar/commit/7a45bf4bec82d1dc29f677eb9e35f1025be96c84))
+- Cap old GNU sparse maps at 1 MiB - ([8049318](https://github.com/dignifiedquire/async-tar/commit/8049318e30ca053f46dfcab4afea0792b2cf0761))
+- Read sparse entries in linear time - ([cd7b352](https://github.com/dignifiedquire/async-tar/commit/cd7b3522e5c3b8d456a19574428ef5dc586b24a8))
+- Stop creating directories at the first error but NotFound - ([f6a371c](https://github.com/dignifiedquire/async-tar/commit/f6a371c698e98515cf3e6234c338a7e119e3e564))
+- Reject a NUL inside a name or link target - ([402e751](https://github.com/dignifiedquire/async-tar/commit/402e7513560a15c63974be438c03fb3bbd547307))
+- Fail reads of a member that ends before its size - ([635738b](https://github.com/dignifiedquire/async-tar/commit/635738bb7218135aea38852af1788d9bf290597e))
+- Reject a GNU sparse map that continues after an empty slot - ([4bd5f12](https://github.com/dignifiedquire/async-tar/commit/4bd5f1254515106484dde376736441d86b17c677))
+- Read any nonzero GNU sparse isextended flag as extended - ([415cc0e](https://github.com/dignifiedquire/async-tar/commit/415cc0e6d343393a5b72ceda1b13b3309d63ecc4))
+- Validate a long path before writing its GNU long name - ([0583e3d](https://github.com/dignifiedquire/async-tar/commit/0583e3d0e062aa3c362bcd3660e223d2e414ee13))
+- [**breaking**] Clear group and other write on unpack by default - ([a6529c5](https://github.com/dignifiedquire/async-tar/commit/a6529c5aae467ed786d7a02464db44caa7f0a115))
+- Write a member's extension headers only after all its fields are set - ([39e9a11](https://github.com/dignifiedquire/async-tar/commit/39e9a11ea02f38b9869c38569559e9edb507a253))
+- Reject a colon in a name component on Windows - ([7dbd050](https://github.com/dignifiedquire/async-tar/commit/7dbd05015989ee69e3dc1a27d321f0716749d664))
+- Refuse to write after a member was left incomplete - ([aea0886](https://github.com/dignifiedquire/async-tar/commit/aea088656f53c661448207f15d0c9637658540d8))
+- Write exactly a member's header size of data - ([0199378](https://github.com/dignifiedquire/async-tar/commit/019937886c783a36fe1dc38885bf8c33c1065ffb))
+- Reject Windows device names when unpacking on Windows - ([44965fb](https://github.com/dignifiedquire/async-tar/commit/44965fbc45c5f15672e3b69eaad3defee93da295))
+
+### 🚜 Refactor
+
+- Expand lints - ([6938648](https://github.com/dignifiedquire/async-tar/commit/69386488abf5bad2d729c707aacb601afd2a0c8e))
+- Build an empty GNU sparse extension header without unsafe code - ([142553c](https://github.com/dignifiedquire/async-tar/commit/142553c1a7db1670f94c178f30fd36eb414c9cf3))
+- View headers through zerocopy's checked transmutes - ([2d3f460](https://github.com/dignifiedquire/async-tar/commit/2d3f460fa6808c1e75b5ea8866c0f0fab913dadf))
+- Remove unsafe code from the header views ([#105](https://github.com/dignifiedquire/async-tar/issues/105)) - ([50ea38e](https://github.com/dignifiedquire/async-tar/commit/50ea38ea1465476abf1fe83bbbded9a5a2a0027e))
+
+### 📚 Documentation
+
+- Describe what Builder::finish writes and that it does not flush ([#88](https://github.com/dignifiedquire/async-tar/issues/88)) - ([5b9d746](https://github.com/dignifiedquire/async-tar/commit/5b9d746b9b3188c34da3faa9611a35892d29ceb8))
+- Recommend a buffered reader for tokio files - ([373af68](https://github.com/dignifiedquire/async-tar/commit/373af68b6dd4754285fda6ec83d402c35a15b961))
+- Update reference reader comments - ([e361293](https://github.com/dignifiedquire/async-tar/commit/e3612938ca3a46ae54ee37254184ded0a9cbfc5e))
+
+### ⚡ Performance
+
+- Write octal header fields without allocating - ([016f80c](https://github.com/dignifiedquire/async-tar/commit/016f80c87c698fe65ff1e91b62309120dc35a79b))
+- Skip unread data through an uninitialized buffer on tokio - ([56e49fd](https://github.com/dignifiedquire/async-tar/commit/56e49fd99df3bac176d103a4f01186a5a6f91a38))
+- Canonicalize the unpack destination once - ([3f19c15](https://github.com/dignifiedquire/async-tar/commit/3f19c15f025ae0e8cfdef97ca2890f21f57e24b6))
+- Copy file data in chunks of up to 128 KiB - ([56c0551](https://github.com/dignifiedquire/async-tar/commit/56c05515bd9cb5cfb3e36d6b56fc91297288e81c))
+- Read directories and small files in batched blocking calls when building - ([23100f1](https://github.com/dignifiedquire/async-tar/commit/23100f141edc2d6dea352dc9704d6649dd072dc3))
+- Create, write and timestamp small files in one blocking call - ([001ba6c](https://github.com/dignifiedquire/async-tar/commit/001ba6ce3ede27de1d8daa472c682a422e8eff29))
+- Unpack each small file in one blocking call - ([8d8820e](https://github.com/dignifiedquire/async-tar/commit/8d8820e15a94dcf8d9f0eddaa15de0a9c7d64873))
+- Write consecutive small files in batched blocking calls - ([12f5b30](https://github.com/dignifiedquire/async-tar/commit/12f5b303f3acfdf0eabab6e080547fff9b932aaa))
+
+### ⚙️ Miscellaneous Tasks
+
+- Run on pushes to main ([#92](https://github.com/dignifiedquire/async-tar/issues/92)) - ([5327304](https://github.com/dignifiedquire/async-tar/commit/5327304eae86ddb1638d3d8f7a6dcf9be6e9e4ef))
+- Check the default features on aarch64-linux-android ([#89](https://github.com/dignifiedquire/async-tar/issues/89)) - ([8a6a834](https://github.com/dignifiedquire/async-tar/commit/8a6a8341bfbba7fcb5d38bf876fcdd30dd17a2a3))
+- Generate the changelog with git-cliff ([#93](https://github.com/dignifiedquire/async-tar/issues/93)) - ([cb59698](https://github.com/dignifiedquire/async-tar/commit/cb59698826721be695e04eebc8ad77c4f72c52c9))
+- Ship the test archives in the published crate ([#90](https://github.com/dignifiedquire/async-tar/issues/90)) - ([443c3c6](https://github.com/dignifiedquire/async-tar/commit/443c3c63af5babea3e0a682c4b8222bf71015c50))
+- Fix all warnings and deny them in CI ([#95](https://github.com/dignifiedquire/async-tar/issues/95)) - ([d474c5d](https://github.com/dignifiedquire/async-tar/commit/d474c5d2866b2ea03bc0ef3090140ff40f160b6c))
+- Run formatting and clippy through cargo make ([#96](https://github.com/dignifiedquire/async-tar/issues/96)) - ([266c9a4](https://github.com/dignifiedquire/async-tar/commit/266c9a4dc264e60a241de8bf2fa9a2a4c7987728))
+- Pin actions and check workflows and dependencies ([#97](https://github.com/dignifiedquire/async-tar/issues/97)) - ([a2b6824](https://github.com/dignifiedquire/async-tar/commit/a2b682422469ce3ddce9d4e71590d5a8743e20a9))
+
+
 ## [0.6.2](https://github.com/dignifiedquire/async-tar/compare/v0.6.1..v0.6.2) - 2026-11-23
 
 ### 🐛 Bug Fixes
