@@ -2,7 +2,10 @@
 use std::fs::Permissions;
 use std::{
     borrow::Cow,
-    cmp, fmt, marker,
+    cmp,
+    collections::VecDeque,
+    ffi::OsStr,
+    fmt, marker,
     path::{Component, Path, PathBuf},
     pin::Pin,
     task::{Context, Poll},
@@ -56,9 +59,10 @@ pub struct EntryFields<R: Read + Unpin> {
     pub size: u64,
     pub header_pos: u64,
     pub file_pos: u64,
-    pub data: Vec<EntryIo<R>>,
+    pub data: VecDeque<EntryIo<R>>,
     pub unpack_xattrs: bool,
     pub preserve_permissions: bool,
+    pub mask: u32,
     pub preserve_mtime: bool,
     pub(crate) read_state: Option<EntryIo<R>>,
 }
@@ -76,6 +80,7 @@ impl<R: Read + Unpin> fmt::Debug for EntryFields<R> {
             .field("data", &self.data)
             .field("unpack_xattrs", &self.unpack_xattrs)
             .field("preserve_permissions", &self.preserve_permissions)
+            .field("mask", &self.mask)
             .field("preserve_mtime", &self.preserve_mtime)
             .field("read_state", &self.read_state)
             .finish()
@@ -305,6 +310,13 @@ impl<R: Read + Unpin> Entry<R> {
         self.fields.preserve_permissions = preserve;
     }
 
+    /// Sets the permission bits cleared when unpacking, as a umask clears them.
+    ///
+    /// The default is the archive's mask. Only Unix applies a mask.
+    pub fn set_mask(&mut self, mask: u32) {
+        self.fields.mask = mask;
+    }
+
     /// Indicate whether access time information is preserved when unpacking
     /// this entry.
     ///
@@ -480,6 +492,13 @@ impl<R: Read + Unpin> EntryFields<R> {
                     // CVE-2002-0399, CVE-2005-1918, CVE-2007-4131
                     Component::ParentDir => return Ok(false),
 
+                    Component::Normal(part) if is_windows_reserved(part) => {
+                        return Err(other(&format!(
+                            "a name Windows reads as a drive, stream or device: {}",
+                            self.path_lossy()
+                        )));
+                    }
+
                     Component::Normal(part) => file_dst.push(part),
                 }
             }
@@ -538,7 +557,7 @@ impl<R: Read + Unpin> EntryFields<R> {
         if kind.is_dir() {
             self.unpack_dir(dst).await?;
             if let Ok(mode) = self.header.mode() {
-                set_perms(dst, None, mode, self.preserve_permissions).await?;
+                set_perms(dst, None, mode, self.preserve_permissions, self.mask).await?;
             }
             return Ok(Unpacked::Other);
         } else if kind.is_hard_link() || kind.is_symlink() {
@@ -642,7 +661,7 @@ impl<R: Read + Unpin> EntryFields<R> {
         if self.header.as_ustar().is_none() && self.path_bytes().ends_with(b"/") {
             self.unpack_dir(dst).await?;
             if let Ok(mode) = self.header.mode() {
-                set_perms(dst, None, mode, self.preserve_permissions).await?;
+                set_perms(dst, None, mode, self.preserve_permissions, self.mask).await?;
             }
             return Ok(Unpacked::Other);
         }
@@ -732,7 +751,14 @@ impl<R: Read + Unpin> EntryFields<R> {
             }
         }
         if let Ok(mode) = self.header.mode() {
-            set_perms(dst, Some(&mut f), mode, self.preserve_permissions).await?;
+            set_perms(
+                dst,
+                Some(&mut f),
+                mode,
+                self.preserve_permissions,
+                self.mask,
+            )
+            .await?;
         }
         if self.unpack_xattrs {
             set_xattrs(self, dst).await?;
@@ -744,8 +770,9 @@ impl<R: Read + Unpin> EntryFields<R> {
             f: Option<&mut fs::File>,
             mode: u32,
             preserve: bool,
+            mask: u32,
         ) -> Result<(), TarError> {
-            _set_perms(dst, f, mode, preserve).await.map_err(|e| {
+            _set_perms(dst, f, mode, preserve, mask).await.map_err(|e| {
                 TarError::new(
                     &format!(
                         "failed to set permissions to {:o} \
@@ -764,10 +791,11 @@ impl<R: Read + Unpin> EntryFields<R> {
             f: Option<&mut fs::File>,
             mode: u32,
             preserve: bool,
+            mask: u32,
         ) -> io::Result<()> {
             use std::os::unix::prelude::*;
 
-            let mode = if preserve { mode } else { mode & 0o777 };
+            let mode = if preserve { mode } else { mode & 0o777 } & !mask;
             let perm = Permissions::from_mode(mode as _);
             match f {
                 Some(f) => f.set_permissions(perm).await,
@@ -781,6 +809,7 @@ impl<R: Read + Unpin> EntryFields<R> {
             f: Option<&mut fs::File>,
             mode: u32,
             _preserve: bool,
+            _mask: u32,
         ) -> io::Result<()> {
             if mode & 0o200 == 0o200 {
                 return Ok(());
@@ -806,6 +835,7 @@ impl<R: Read + Unpin> EntryFields<R> {
             f: Option<&mut fs::File>,
             mode: u32,
             _preserve: bool,
+            _mask: u32,
         ) -> io::Result<()> {
             Err(io::Error::new(io::ErrorKind::Other, "Not implemented"))
         }
@@ -871,7 +901,11 @@ impl<R: Read + Unpin> EntryFields<R> {
         let mut ancestor = dir;
         let mut dirs_to_create = Vec::new();
 
-        while symlink_metadata(ancestor).await.is_err() {
+        // Any error but NotFound, such as a path too long for the OS, ends the walk.
+        while let Err(err) = symlink_metadata(ancestor).await {
+            if err.kind() != ErrorKind::NotFound {
+                return Err(err);
+            }
             dirs_to_create.push(ancestor);
             if let Some(parent) = ancestor.parent() {
                 ancestor = parent;
@@ -926,11 +960,7 @@ impl<R: Read + Unpin> Read for EntryFields<R> {
     ) -> Poll<io::Result<usize>> {
         loop {
             if self.read_state.is_none() {
-                if self.data.is_empty() {
-                    self.read_state = None;
-                } else {
-                    self.read_state = Some(self.data.remove(0));
-                }
+                self.read_state = self.data.pop_front();
             }
 
             if let Some(io) = &mut self.read_state {
@@ -969,11 +999,7 @@ impl<R: Read + Unpin> Read for EntryFields<R> {
     ) -> Poll<io::Result<()>> {
         loop {
             if self.read_state.is_none() {
-                if self.data.is_empty() {
-                    self.read_state = None;
-                } else {
-                    self.read_state = Some(self.data.remove(0));
-                }
+                self.read_state = self.data.pop_front();
             }
 
             if let Some(io) = &mut self.read_state {
@@ -1015,7 +1041,13 @@ impl<R: Read + Unpin> Read for EntryIo<R> {
     ) -> Poll<io::Result<usize>> {
         match &mut *self {
             EntryIo::Pad(io) => Pin::new(io).poll_read(cx, into),
-            EntryIo::Data(io) => Pin::new(io).poll_read(cx, into),
+            EntryIo::Data(io) => {
+                let n = ready!(Pin::new(&mut *io).poll_read(cx, into))?;
+                if n == 0 && !into.is_empty() && io.limit() > 0 {
+                    return Poll::Ready(Err(truncation_error()));
+                }
+                Poll::Ready(Ok(n))
+            }
         }
     }
 }
@@ -1029,8 +1061,80 @@ impl<R: Read + Unpin> Read for EntryIo<R> {
     ) -> Poll<io::Result<()>> {
         match &mut *self {
             EntryIo::Pad(io) => Pin::new(io).poll_read(cx, into),
-            EntryIo::Data(io) => Pin::new(io).poll_read(cx, into),
+            EntryIo::Data(io) => {
+                let filled = into.filled().len();
+                ready!(Pin::new(&mut *io).poll_read(cx, into))?;
+                if into.filled().len() == filled && into.remaining() > 0 && io.limit() > 0 {
+                    return Poll::Ready(Err(truncation_error()));
+                }
+                Poll::Ready(Ok(()))
+            }
         }
+    }
+}
+
+/// Returns the error for a truncated member.
+fn truncation_error() -> Error {
+    Error::new(ErrorKind::UnexpectedEof, "archive member is truncated")
+}
+
+/// Returns whether Windows reads a name component as a drive, a stream or a device.
+#[cfg(windows)]
+fn is_windows_reserved(part: &OsStr) -> bool {
+    part.as_encoded_bytes().contains(&b':') || is_device_name(part)
+}
+
+#[cfg(not(windows))]
+fn is_windows_reserved(_: &OsStr) -> bool {
+    false
+}
+
+/// Returns whether Windows opens `name` as a device, such as `NUL` or `COM1`.
+#[cfg(windows)]
+fn is_device_name(name: &OsStr) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn RtlIsDosDeviceName_U(name: *const u16) -> u32;
+    }
+
+    // A device name may be followed by an extension, a stream or spaces.
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    let base = name.split(['.', ':']).next().unwrap_or_default();
+    let base = base.trim_end_matches(' ');
+    if !is_device_base_name(base) {
+        return false;
+    }
+    if base.len() == name.len() {
+        return true;
+    }
+
+    // Since Windows 11 a device name with an extension, such as `CON.txt`, is a
+    // file, so Windows decides.
+    let wide: Vec<u16> = OsStr::new(name).encode_wide().chain([0]).collect();
+    // SAFETY: `wide` is a NUL-terminated UTF-16 string that outlives the call.
+    unsafe { RtlIsDosDeviceName_U(wide.as_ptr()) != 0 }
+}
+
+/// Returns whether `name` is a Windows device name without an extension.
+#[cfg(windows)]
+fn is_device_base_name(name: &str) -> bool {
+    let name = name.to_ascii_uppercase();
+    if matches!(
+        name.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) {
+        return true;
+    }
+    match name.split_at_checked(3) {
+        Some(("COM" | "LPT", number)) => {
+            matches!(number.as_bytes(), [b'1'..=b'9'])
+                || matches!(number, "\u{b9}" | "\u{b2}" | "\u{b3}")
+        }
+        _ => false,
     }
 }
 

@@ -31,67 +31,69 @@ impl<'entry> Iterator for PaxExtensions<'entry> {
     type Item = io::Result<PaxExtension<'entry>>;
 
     fn next(&mut self) -> Option<io::Result<PaxExtension<'entry>>> {
-        while !self.data.is_empty() {
-            if self.data[0] == 0 {
-                self.data = &self.data[1..];
-                continue;
-            }
-
-            let space_idx = match self.data.iter().position(|b| *b == b' ') {
-                Some(idx) => idx,
-                None => {
-                    self.data = &[];
-                    return Some(Err(other("malformed pax extension: no space after length")));
-                }
-            };
-
-            let len_str = match str::from_utf8(&self.data[..space_idx]) {
-                Ok(s) => s,
-                Err(_) => {
-                    self.data = &[];
-                    return Some(Err(other("malformed pax extension: non-utf8 length")));
-                }
-            };
-
-            let is_decimal = !len_str.is_empty() && len_str.bytes().all(|b| b.is_ascii_digit());
-            let total_len = match len_str.parse::<usize>() {
-                Ok(len) if is_decimal && len > space_idx => len,
-                _ => {
-                    self.data = &[];
-                    return Some(Err(other("malformed pax extension: invalid length")));
-                }
-            };
-
-            if self.data.len() < total_len {
-                self.data = &[];
-                return Some(Err(other("malformed pax extension: record truncated")));
-            }
-
-            let record = &self.data[..total_len];
-            self.data = &self.data[total_len..];
-
-            let Some(record_content) = record.strip_suffix(b"\n") else {
-                self.data = &[];
-                return Some(Err(other(
-                    "malformed pax extension: no newline at its length",
-                )));
-            };
-
-            let kv = &record_content[space_idx + 1..];
-            let equals_idx = match kv.iter().position(|b| *b == b'=') {
-                Some(idx) => idx,
-                None => {
-                    return Some(Err(other("malformed pax extension: no '=' in record")));
-                }
-            };
-
-            return Some(Ok(PaxExtension {
-                key: &kv[..equals_idx],
-                value: &kv[equals_idx + 1..],
-            }));
+        if self.data.is_empty() {
+            return None;
         }
 
-        None
+        // A NUL ends the records, and only NUL padding may follow it.
+        if self.data[0] == 0 {
+            let is_padding = self.data.iter().all(|b| *b == 0);
+            self.data = &[];
+            return (!is_padding).then(|| Err(other("malformed pax extension: data after NUL")));
+        }
+
+        let space_idx = match self.data.iter().position(|b| *b == b' ') {
+            Some(idx) => idx,
+            None => {
+                self.data = &[];
+                return Some(Err(other("malformed pax extension: no space after length")));
+            }
+        };
+
+        let len_str = match str::from_utf8(&self.data[..space_idx]) {
+            Ok(s) => s,
+            Err(_) => {
+                self.data = &[];
+                return Some(Err(other("malformed pax extension: non-utf8 length")));
+            }
+        };
+
+        let is_decimal = !len_str.is_empty() && len_str.bytes().all(|b| b.is_ascii_digit());
+        let total_len = match len_str.parse::<usize>() {
+            Ok(len) if is_decimal && len > space_idx => len,
+            _ => {
+                self.data = &[];
+                return Some(Err(other("malformed pax extension: invalid length")));
+            }
+        };
+
+        if self.data.len() < total_len {
+            self.data = &[];
+            return Some(Err(other("malformed pax extension: record truncated")));
+        }
+
+        let record = &self.data[..total_len];
+        self.data = &self.data[total_len..];
+
+        let Some(record_content) = record.strip_suffix(b"\n") else {
+            self.data = &[];
+            return Some(Err(other(
+                "malformed pax extension: no newline at its length",
+            )));
+        };
+
+        let kv = &record_content[space_idx + 1..];
+        let equals_idx = match kv.iter().position(|b| *b == b'=') {
+            Some(idx) => idx,
+            None => {
+                return Some(Err(other("malformed pax extension: no '=' in record")));
+            }
+        };
+
+        Some(Ok(PaxExtension {
+            key: &kv[..equals_idx],
+            value: &kv[equals_idx + 1..],
+        }))
     }
 }
 

@@ -1271,7 +1271,7 @@ impl GnuHeader {
     /// Note that this is handled internally by this library, and is likely only
     /// interesting if a `raw` iterator is being used.
     pub fn is_extended(&self) -> bool {
-        self.isextended[0] == 1
+        self.isextended[0] != 0
     }
 
     /// Views this as a normal `Header`
@@ -1387,7 +1387,7 @@ impl GnuExtSparseHeader {
 
     /// Indicates if another sparse header should be following this one.
     pub fn is_extended(&self) -> bool {
-        self.isextended[0] == 1
+        self.isextended[0] != 0
     }
 }
 

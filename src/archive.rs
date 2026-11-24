@@ -1,5 +1,7 @@
 use std::{
-    cmp, mem,
+    cmp,
+    collections::VecDeque,
+    iter, mem,
     path::Path,
     pin::Pin,
     sync::{Arc, Mutex},
@@ -52,8 +54,14 @@ pub struct ArchiveInner<R: Read + Unpin> {
     pos: u64,
     unpack_xattrs: bool,
     preserve_permissions: bool,
+    mask: u32,
     preserve_mtime: bool,
     ignore_zeros: bool,
+    max_pax_extension_size: u64,
+    max_global_pax_extensions_size: u64,
+    max_gnu_extension_size: u64,
+    max_gnu_sparse_map_size: u64,
+    global_pax_extensions_size: u64,
     obj: R,
 }
 
@@ -63,8 +71,13 @@ pub struct ArchiveBuilder<R: Read + Unpin> {
     obj: R,
     unpack_xattrs: bool,
     preserve_permissions: bool,
+    mask: u32,
     preserve_mtime: bool,
     ignore_zeros: bool,
+    max_pax_extension_size: u64,
+    max_global_pax_extensions_size: u64,
+    max_gnu_extension_size: u64,
+    max_gnu_sparse_map_size: u64,
 }
 
 impl<R: Read + Unpin> ArchiveBuilder<R> {
@@ -73,8 +86,13 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
         ArchiveBuilder {
             unpack_xattrs: false,
             preserve_permissions: false,
+            mask: 0o022,
             preserve_mtime: true,
             ignore_zeros: false,
+            max_pax_extension_size: 256 * 1024,
+            max_global_pax_extensions_size: 1024 * 1024,
+            max_gnu_extension_size: 128 * 1024,
+            max_gnu_sparse_map_size: 1024 * 1024,
             obj,
         }
     }
@@ -101,6 +119,14 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
         self
     }
 
+    /// Sets the permission bits cleared when unpacking, as a umask clears them.
+    ///
+    /// The default `0o022` clears group and other write. Only Unix applies a mask.
+    pub fn set_mask(mut self, mask: u32) -> Self {
+        self.mask = mask;
+        self
+    }
+
     /// Indicate whether access time information is preserved when unpacking
     /// this entry.
     ///
@@ -119,13 +145,52 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
         self
     }
 
+    /// Sets the largest pax header body read, local or global.
+    ///
+    /// A larger header is rejected before its body is read. The default is
+    /// 256 KiB.
+    pub fn set_max_pax_extension_size(mut self, size: u64) -> Self {
+        self.max_pax_extension_size = size;
+        self
+    }
+
+    /// Sets the largest total of the archive's pax global header bodies.
+    ///
+    /// A global header past it is rejected before its body is read. The default
+    /// is 1 MiB.
+    pub fn set_max_global_pax_extensions_size(mut self, size: u64) -> Self {
+        self.max_global_pax_extensions_size = size;
+        self
+    }
+
+    /// Sets the largest GNU long name or link read.
+    ///
+    /// A larger one is rejected before it is read. The default is 128 KiB.
+    pub fn set_max_gnu_extension_size(mut self, size: u64) -> Self {
+        self.max_gnu_extension_size = size;
+        self
+    }
+
+    /// Sets the largest GNU sparse map read, in bytes of its extension headers.
+    ///
+    /// The default is 1 MiB.
+    pub fn set_max_gnu_sparse_map_size(mut self, size: u64) -> Self {
+        self.max_gnu_sparse_map_size = size;
+        self
+    }
+
     /// Construct the archive, ready to accept inputs.
     pub fn build(self) -> Archive<R> {
         let Self {
             unpack_xattrs,
             preserve_permissions,
+            mask,
             preserve_mtime,
             ignore_zeros,
+            max_pax_extension_size,
+            max_global_pax_extensions_size,
+            max_gnu_extension_size,
+            max_gnu_sparse_map_size,
             obj,
         } = self;
 
@@ -133,8 +198,14 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
             inner: Arc::new(Mutex::new(ArchiveInner {
                 unpack_xattrs,
                 preserve_permissions,
+                mask,
                 preserve_mtime,
                 ignore_zeros,
+                max_pax_extension_size,
+                max_global_pax_extensions_size,
+                max_gnu_extension_size,
+                max_gnu_sparse_map_size,
+                global_pax_extensions_size: 0,
                 obj,
                 pos: 0,
             })),
@@ -145,16 +216,7 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
 impl<R: Read + Unpin> Archive<R> {
     /// Create a new archive with the underlying object as the reader.
     pub fn new(obj: R) -> Archive<R> {
-        Archive {
-            inner: Arc::new(Mutex::new(ArchiveInner {
-                unpack_xattrs: false,
-                preserve_permissions: false,
-                preserve_mtime: true,
-                ignore_zeros: false,
-                obj,
-                pos: 0,
-            })),
-        }
+        ArchiveBuilder::new(obj).build()
     }
 
     /// Unwrap this archive, returning the underlying object.
@@ -513,6 +575,14 @@ impl<R: Read + Unpin> Entries<R> {
                 return Poll::Ready(Some(Err(other("a name starting with a drive letter"))));
             }
 
+            // A name or link target may not contain a NUL, since a C string ends at one.
+            let is_target_nul = new_fields
+                .link_name_bytes()
+                .is_some_and(|target| target.contains(&0));
+            if path.contains(&0) || is_target_nul {
+                return Poll::Ready(Some(Err(other("a NUL in a name or link target"))));
+            }
+
             // A link's name may not end in a slash or be `.`.
             let is_link = entry_type.is_symlink() || entry_type.is_hard_link();
             let is_dir_name = path.ends_with(b"/")
@@ -521,6 +591,13 @@ impl<R: Read + Unpin> Entries<R> {
                     .all(|part| part.is_empty() || part == b".");
             if is_link && is_dir_name {
                 return Poll::Ready(Some(Err(other("a link named like a directory"))));
+            }
+
+            // A name ending in a slash names a directory, so its member may not carry data.
+            if path.ends_with(b"/") && new_fields.size != 0 {
+                return Poll::Ready(Some(Err(other(
+                    "a name ending in a slash on a member with data",
+                ))));
             }
 
             // A link's target must be UTF-8.
@@ -759,12 +836,41 @@ fn poll_next_raw<R: Read + Unpin>(
         ))));
     }
 
+    // Sizes beyond i64::MAX are refused, since file offsets are signed 64-bit.
+    if i64::try_from(size).is_err() {
+        return Poll::Ready(Some(Err(other("archive header size is out of range"))));
+    }
+
+    // Extension bodies are read into memory, so their sizes are checked first.
+    {
+        let inner = &mut *archive.inner.lock().unwrap();
+        let is_gnu_extension = entry_type.is_gnu_longname() || entry_type.is_gnu_longlink();
+        if is_gnu_extension && size > inner.max_gnu_extension_size {
+            return Poll::Ready(Some(Err(other(
+                "a GNU long name or link over its size limit",
+            ))));
+        }
+        let is_global = entry_type.is_pax_global_extensions();
+        let is_pax_extension = is_global || entry_type.is_pax_local_extensions();
+        if is_pax_extension && size > inner.max_pax_extension_size {
+            return Poll::Ready(Some(Err(other("a pax header over its size limit"))));
+        }
+        if is_global {
+            let total = inner.global_pax_extensions_size.saturating_add(size);
+            if total > inner.max_global_pax_extensions_size {
+                return Poll::Ready(Some(Err(other("pax global headers over their size limit"))));
+            }
+            inner.global_pax_extensions_size = total;
+        }
+    }
+
     let data = EntryIo::Data(archive.clone().take(size));
 
     let ArchiveInner {
         unpack_xattrs,
         preserve_mtime,
         preserve_permissions,
+        mask,
         ..
     } = &*archive.inner.lock().unwrap();
 
@@ -772,21 +878,23 @@ fn poll_next_raw<R: Read + Unpin>(
         size,
         header_pos,
         file_pos,
-        data: vec![data],
+        data: VecDeque::from([data]),
         header,
         long_pathname: None,
         long_linkname: None,
         pax_extensions: None,
         unpack_xattrs: *unpack_xattrs,
         preserve_permissions: *preserve_permissions,
+        mask: *mask,
         preserve_mtime: *preserve_mtime,
         read_state: None,
     };
 
     // Store where the next entry is, rounding up by 512 bytes (the size of
     // a header);
-    let size = (size + 511) & !(512 - 1);
-    *next += size;
+    *next = next
+        .checked_add(size.next_multiple_of(512))
+        .ok_or_else(|| other("archive header size is out of range"))?;
 
     Poll::Ready(Some(Ok(ret.into_entry())))
 }
@@ -843,6 +951,10 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
         .last()
         .map_or(gnu.is_extended(), |ext| ext.is_extended())
     {
+        let max_map_size = archive.inner.lock().unwrap().max_gnu_sparse_map_size;
+        if (ext_headers.len() as u64 + 1).saturating_mul(512) > max_map_size {
+            return Poll::Ready(Err(other("a GNU sparse map over its size limit")));
+        }
         if current_ext.is_none() {
             *current_ext_pos = 0;
         }
@@ -862,6 +974,25 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
     }
     let ext_headers = mem::take(ext_headers);
     entry.data.clear();
+
+    // The map ends at its first empty slot, so no slot after it may be set.
+    let maps = iter::once((&gnu.sparse[..], gnu.is_extended())).chain(
+        ext_headers
+            .iter()
+            .map(|ext| (&ext.sparse[..], ext.is_extended())),
+    );
+    let mut is_ended = false;
+    for (slots, is_extended) in maps {
+        for slot in slots {
+            if !slot.is_empty() && is_ended {
+                return Poll::Ready(Err(other("a GNU sparse map entry after an empty slot")));
+            }
+            is_ended |= slot.is_empty();
+        }
+        if is_ended && is_extended {
+            return Poll::Ready(Err(other("a GNU sparse map extended after an empty slot")));
+        }
+    }
 
     let mut cur = 0;
     let mut remaining = entry.size;
@@ -888,7 +1019,7 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
                 ));
             } else if cur < off {
                 let block = io::repeat(0).take((off - cur) as _);
-                data.push(EntryIo::Pad(block));
+                data.push_back(EntryIo::Pad(block));
             }
             cur = off
                 .checked_add(len)
@@ -899,7 +1030,7 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
                      listed",
                 )
             })?;
-            data.push(EntryIo::Data(reader.clone().take(len)));
+            data.push_back(EntryIo::Data(reader.clone().take(len)));
             Ok(())
         };
         let ext_blocks = ext_headers.iter().flat_map(|ext| &ext.sparse);
