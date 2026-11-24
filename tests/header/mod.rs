@@ -1,5 +1,3 @@
-#![allow(clippy::cognitive_complexity)]
-
 use std::{
     fs::{self, File},
     io::{self, Write},

@@ -742,12 +742,11 @@ impl<R: Read + Unpin> EntryFields<R> {
             return Ok(Unpacked::Other);
 
             #[cfg(target_arch = "wasm32")]
-            #[allow(unused_variables)]
             #[expect(
                 clippy::unused_async,
                 reason = "keeps the signature of the other platforms"
             )]
-            async fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
+            async fn symlink(_src: &Path, _dst: &Path) -> io::Result<()> {
                 Err(io::Error::other("Not implemented"))
             }
 
@@ -932,15 +931,14 @@ impl<R: Read + Unpin> EntryFields<R> {
         }
 
         #[cfg(target_arch = "wasm32")]
-        #[allow(unused_variables)]
         #[expect(
             clippy::unused_async,
             reason = "keeps the signature of the other platforms"
         )]
         async fn _set_perms(
-            dst: &Path,
-            f: Option<&mut fs::File>,
-            mode: u32,
+            _dst: &Path,
+            _f: Option<&mut fs::File>,
+            _mode: u32,
             _preserve: bool,
             _mask: u32,
         ) -> io::Result<()> {
@@ -996,8 +994,10 @@ impl<R: Read + Unpin> EntryFields<R> {
             not(feature = "xattr"),
             target_arch = "wasm32"
         ))]
-        // This keeps the async signature of the xattr version.
-        #[allow(clippy::unused_async)]
+        #[expect(
+            clippy::unused_async,
+            reason = "keeps the async signature of the xattr version"
+        )]
         async fn set_xattrs<R: Read + Unpin>(_: &mut EntryFields<R>, _: &Path) -> io::Result<()> {
             Ok(())
         }
@@ -1150,8 +1150,7 @@ fn set_file_perms(file: &std_fs::File, mode: u32, _preserve: bool, _mask: u32) -
 }
 
 #[cfg(target_arch = "wasm32")]
-#[allow(unused_variables)]
-fn set_file_perms(file: &std_fs::File, mode: u32, preserve: bool, mask: u32) -> io::Result<()> {
+fn set_file_perms(_file: &std_fs::File, _mode: u32, _preserve: bool, _mask: u32) -> io::Result<()> {
     Err(io::Error::other("Not implemented"))
 }
 

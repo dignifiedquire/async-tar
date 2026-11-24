@@ -22,7 +22,6 @@ use crate::{EntryType, other};
 
 /// Representation of the header of an entry in an archive
 #[repr(C)]
-#[allow(missing_docs)]
 pub struct Header {
     bytes: [u8; 512],
 }
@@ -43,7 +42,10 @@ pub enum HeaderMode {
 
 /// Representation of the header of an entry in an archive
 #[repr(C)]
-#[allow(missing_docs)]
+#[expect(
+    missing_docs,
+    reason = "the fields are the header fields of the tar format"
+)]
 pub struct OldHeader {
     pub name: [u8; 100],
     pub mode: [u8; 8],
@@ -59,7 +61,10 @@ pub struct OldHeader {
 
 /// Representation of the header of an entry in an archive
 #[repr(C)]
-#[allow(missing_docs)]
+#[expect(
+    missing_docs,
+    reason = "the fields are the header fields of the tar format"
+)]
 pub struct UstarHeader {
     pub name: [u8; 100],
     pub mode: [u8; 8],
@@ -84,7 +89,10 @@ pub struct UstarHeader {
 
 /// Representation of the header of an entry in an archive
 #[repr(C)]
-#[allow(missing_docs)]
+#[expect(
+    missing_docs,
+    reason = "the fields are the header fields of the tar format"
+)]
 pub struct GnuHeader {
     pub name: [u8; 100],
     pub mode: [u8; 8],
@@ -118,7 +126,10 @@ pub struct GnuHeader {
 ///
 /// Specifies the offset/number of bytes of a chunk of data in octal.
 #[repr(C)]
-#[allow(missing_docs)]
+#[expect(
+    missing_docs,
+    reason = "the fields are the header fields of the tar format"
+)]
 pub struct GnuSparseHeader {
     pub offset: [u8; 12],
     pub numbytes: [u8; 12],
@@ -129,7 +140,10 @@ pub struct GnuSparseHeader {
 /// When a `GnuHeader` has the `isextended` flag set to `1` then the contents of
 /// the next entry will be one of these headers.
 #[repr(C)]
-#[allow(missing_docs)]
+#[expect(
+    missing_docs,
+    reason = "the fields are the header fields of the tar format"
+)]
 #[derive(Debug)]
 pub struct GnuExtSparseHeader {
     pub sparse: [GnuSparseHeader; 21],
@@ -737,8 +751,7 @@ impl Header {
     }
 
     #[cfg(target_arch = "wasm32")]
-    #[allow(unused_variables)]
-    fn fill_platform_from(&mut self, meta: &Metadata, mode: HeaderMode) {
+    fn fill_platform_from(&mut self, _meta: &Metadata, _mode: HeaderMode) {
         unimplemented!();
     }
 
