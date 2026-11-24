@@ -1,8 +1,13 @@
 //! Tests for reading, writing and unpacking archives.
 
 use std::{
+    array, fs as std_fs,
     iter::repeat_n,
     path::{Path, PathBuf},
+    pin::Pin,
+    str,
+    task::{Context, Poll},
+    time::{Duration, UNIX_EPOCH},
 };
 
 use async_tar::{
@@ -40,10 +45,7 @@ macro_rules! tar {
 
 /// Helper to create a file and write contents, ensuring data is synced to disk.
 /// This is necessary for tokio where metadata isn't updated until sync.
-async fn create_file_with_contents(
-    path: impl AsRef<std::path::Path>,
-    contents: &[u8],
-) -> std::io::Result<()> {
+async fn create_file_with_contents(path: impl AsRef<Path>, contents: &[u8]) -> io::Result<()> {
     let mut file = File::create(path.as_ref()).await?;
     file.write_all(contents).await?;
     file.sync_all().await?;
@@ -94,7 +96,7 @@ async fn simple_concat() {
 
         while let Some(entry) = entries.next().await {
             let e = t!(entry);
-            names.push(t!(::std::str::from_utf8(&e.path_bytes())).to_string());
+            names.push(t!(str::from_utf8(&e.path_bytes())).to_string());
         }
 
         names
@@ -791,7 +793,7 @@ async fn file_times() {
     t!(ar.unpack(td.path()).await);
 
     let meta = fs::metadata(td.path().join("a")).await.unwrap();
-    let expected = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+    let expected = UNIX_EPOCH + Duration::from_secs(1_000_000_000);
     assert_eq!(t!(meta.modified()), expected);
     assert_eq!(t!(meta.accessed()), expected);
 }
@@ -1012,45 +1014,45 @@ async fn reading_sparse() {
     let mut entries = t!(ar.entries());
 
     let mut a = t!(entries.next().await.unwrap());
-    let mut s = String::new();
+    let mut s = Vec::new();
     assert_eq!(&*a.header().path_bytes(), b"sparse_begin.txt");
-    t!(a.read_to_string(&mut s).await);
-    assert_eq!(&s[..5], "test\n");
-    assert!(s[5..].chars().all(|x| x == '\u{0}'));
+    t!(a.read_to_end(&mut s).await);
+    assert_eq!(&s[..5], b"test\n");
+    assert!(s[5..].iter().all(|x| *x == 0));
 
     let mut a = t!(entries.next().await.unwrap());
-    let mut s = String::new();
+    let mut s = Vec::new();
     assert_eq!(&*a.header().path_bytes(), b"sparse_end.txt");
-    t!(a.read_to_string(&mut s).await);
-    assert!(s[..s.len() - 9].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[s.len() - 9..], "test_end\n");
+    t!(a.read_to_end(&mut s).await);
+    assert!(s[..s.len() - 9].iter().all(|x| *x == 0));
+    assert_eq!(&s[s.len() - 9..], b"test_end\n");
 
     let mut a = t!(entries.next().await.unwrap());
-    let mut s = String::new();
+    let mut s = Vec::new();
     assert_eq!(&*a.header().path_bytes(), b"sparse_ext.txt");
-    t!(a.read_to_string(&mut s).await);
-    assert!(s[..0x1000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x1000..0x1000 + 5], "text\n");
-    assert!(s[0x1000 + 5..0x3000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x3000..0x3000 + 5], "text\n");
-    assert!(s[0x3000 + 5..0x5000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x5000..0x5000 + 5], "text\n");
-    assert!(s[0x5000 + 5..0x7000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x7000..0x7000 + 5], "text\n");
-    assert!(s[0x7000 + 5..0x9000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x9000..0x9000 + 5], "text\n");
-    assert!(s[0x9000 + 5..0xb000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0xb000..0xb000 + 5], "text\n");
+    t!(a.read_to_end(&mut s).await);
+    assert!(s[..0x1000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x1000..0x1000 + 5], b"text\n");
+    assert!(s[0x1000 + 5..0x3000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x3000..0x3000 + 5], b"text\n");
+    assert!(s[0x3000 + 5..0x5000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x5000..0x5000 + 5], b"text\n");
+    assert!(s[0x5000 + 5..0x7000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x7000..0x7000 + 5], b"text\n");
+    assert!(s[0x7000 + 5..0x9000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x9000..0x9000 + 5], b"text\n");
+    assert!(s[0x9000 + 5..0xb000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0xb000..0xb000 + 5], b"text\n");
 
     let mut a = t!(entries.next().await.unwrap());
-    let mut s = String::new();
+    let mut s = Vec::new();
     assert_eq!(&*a.header().path_bytes(), b"sparse.txt");
-    t!(a.read_to_string(&mut s).await);
-    assert!(s[..0x1000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x1000..0x1000 + 6], "hello\n");
-    assert!(s[0x1000 + 6..0x2fa0].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x2fa0..0x2fa0 + 6], "world\n");
-    assert!(s[0x2fa0 + 6..0x4000].chars().all(|x| x == '\u{0}'));
+    t!(a.read_to_end(&mut s).await);
+    assert!(s[..0x1000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x1000..0x1000 + 6], b"hello\n");
+    assert!(s[0x1000 + 6..0x2fa0].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x2fa0..0x2fa0 + 6], b"world\n");
+    assert!(s[0x2fa0 + 6..0x4000].iter().all(|x| *x == 0));
 
     assert!(entries.next().await.is_none());
 }
@@ -1063,46 +1065,46 @@ async fn extract_sparse() {
     let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
     t!(ar.unpack(td.path()).await);
 
-    let mut s = String::new();
+    let mut s = Vec::new();
     t!(t!(File::open(td.path().join("sparse_begin.txt")).await)
-        .read_to_string(&mut s)
+        .read_to_end(&mut s)
         .await);
-    assert_eq!(&s[..5], "test\n");
-    assert!(s[5..].chars().all(|x| x == '\u{0}'));
+    assert_eq!(&s[..5], b"test\n");
+    assert!(s[5..].iter().all(|x| *x == 0));
 
     s.clear();
     t!(t!(File::open(td.path().join("sparse_end.txt")).await)
-        .read_to_string(&mut s)
+        .read_to_end(&mut s)
         .await);
-    assert!(s[..s.len() - 9].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[s.len() - 9..], "test_end\n");
+    assert!(s[..s.len() - 9].iter().all(|x| *x == 0));
+    assert_eq!(&s[s.len() - 9..], b"test_end\n");
 
     s.clear();
     t!(t!(File::open(td.path().join("sparse_ext.txt")).await)
-        .read_to_string(&mut s)
+        .read_to_end(&mut s)
         .await);
-    assert!(s[..0x1000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x1000..0x1000 + 5], "text\n");
-    assert!(s[0x1000 + 5..0x3000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x3000..0x3000 + 5], "text\n");
-    assert!(s[0x3000 + 5..0x5000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x5000..0x5000 + 5], "text\n");
-    assert!(s[0x5000 + 5..0x7000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x7000..0x7000 + 5], "text\n");
-    assert!(s[0x7000 + 5..0x9000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x9000..0x9000 + 5], "text\n");
-    assert!(s[0x9000 + 5..0xb000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0xb000..0xb000 + 5], "text\n");
+    assert!(s[..0x1000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x1000..0x1000 + 5], b"text\n");
+    assert!(s[0x1000 + 5..0x3000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x3000..0x3000 + 5], b"text\n");
+    assert!(s[0x3000 + 5..0x5000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x5000..0x5000 + 5], b"text\n");
+    assert!(s[0x5000 + 5..0x7000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x7000..0x7000 + 5], b"text\n");
+    assert!(s[0x7000 + 5..0x9000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x9000..0x9000 + 5], b"text\n");
+    assert!(s[0x9000 + 5..0xb000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0xb000..0xb000 + 5], b"text\n");
 
     s.clear();
     t!(t!(File::open(td.path().join("sparse.txt")).await)
-        .read_to_string(&mut s)
+        .read_to_end(&mut s)
         .await);
-    assert!(s[..0x1000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x1000..0x1000 + 6], "hello\n");
-    assert!(s[0x1000 + 6..0x2fa0].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x2fa0..0x2fa0 + 6], "world\n");
-    assert!(s[0x2fa0 + 6..0x4000].chars().all(|x| x == '\u{0}'));
+    assert!(s[..0x1000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x1000..0x1000 + 6], b"hello\n");
+    assert!(s[0x1000 + 6..0x2fa0].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x2fa0..0x2fa0 + 6], b"world\n");
+    assert!(s[0x2fa0 + 6..0x4000].iter().all(|x| *x == 0));
 }
 
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
@@ -1553,7 +1555,7 @@ async fn sparse_extension_does_not_carry_to_next_entry() {
     carrier.set_size(1024);
     {
         let gnu = carrier.as_gnu_mut().unwrap();
-        gnu.sparse = std::array::from_fn(|_| sparse_slot(1024, 0));
+        gnu.sparse = array::from_fn(|_| sparse_slot(1024, 0));
         gnu.sparse[0] = sparse_slot(0, 1024);
         gnu.isextended = [1];
         gnu.realsize = sparse_octal(1024);
@@ -1610,7 +1612,7 @@ fn sparse_member(slots: [GnuSparseHeader; 4], ext_headers: usize) -> Vec<u8> {
     push_block(&mut tar, member.as_bytes());
     for i in 0..ext_headers {
         let mut ext = GnuExtSparseHeader::new();
-        ext.sparse = std::array::from_fn(|_| sparse_slot(BLOCK as u64, 0));
+        ext.sparse = array::from_fn(|_| sparse_slot(BLOCK as u64, 0));
         ext.isextended = [u8::from(i + 1 < ext_headers)];
         push_block(&mut tar, ext.as_bytes());
     }
@@ -1623,7 +1625,7 @@ fn sparse_member(slots: [GnuSparseHeader; 4], ext_headers: usize) -> Vec<u8> {
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn sparse_maps_over_their_limit_are_rejected() {
     let slots = || {
-        std::array::from_fn(|i| match i {
+        array::from_fn(|i| match i {
             0 => sparse_slot(0, BLOCK as u64),
             _ => sparse_slot(BLOCK as u64, 0),
         })
@@ -1654,7 +1656,7 @@ async fn sparse_maps_with_an_entry_after_an_empty_slot_are_rejected() {
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn sparse_maps_extend_on_any_nonzero_flag() {
-    let slots = std::array::from_fn(|i| match i {
+    let slots = array::from_fn(|i| match i {
         0 => sparse_slot(0, BLOCK as u64),
         _ => sparse_slot(BLOCK as u64, 0),
     });
@@ -1676,7 +1678,7 @@ struct PendingReader<'a> {
 }
 
 impl PendingReader<'_> {
-    fn poll_pending(&mut self, cx: &mut std::task::Context<'_>) -> bool {
+    fn toggle_pending(&mut self, cx: &mut Context<'_>) -> bool {
         self.is_pending = !self.is_pending;
         if self.is_pending {
             cx.waker().wake_by_ref();
@@ -1688,34 +1690,34 @@ impl PendingReader<'_> {
 #[cfg(feature = "runtime-smol")]
 impl Read for PendingReader<'_> {
     fn poll_read(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
         buf: &mut [u8],
-    ) -> std::task::Poll<io::Result<usize>> {
-        if self.poll_pending(cx) {
-            return std::task::Poll::Pending;
+    ) -> Poll<io::Result<usize>> {
+        if self.toggle_pending(cx) {
+            return Poll::Pending;
         }
         let n = buf.len().min(self.data.len()).min(7);
         buf[..n].copy_from_slice(&self.data[..n]);
         self.data = &self.data[n..];
-        std::task::Poll::Ready(Ok(n))
+        Poll::Ready(Ok(n))
     }
 }
 
 #[cfg(feature = "runtime-tokio")]
 impl Read for PendingReader<'_> {
     fn poll_read(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> std::task::Poll<io::Result<()>> {
-        if self.poll_pending(cx) {
-            return std::task::Poll::Pending;
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if self.toggle_pending(cx) {
+            return Poll::Pending;
         }
         let n = buf.remaining().min(self.data.len()).min(7);
         buf.put_slice(&self.data[..n]);
         self.data = &self.data[n..];
-        std::task::Poll::Ready(Ok(()))
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -2241,7 +2243,7 @@ async fn paths_too_long_for_the_os_create_no_directories() {
 
     let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
     assert!(Archive::new(&tar[..]).unpack(td.path()).await.is_err());
-    assert!(t!(std::fs::read_dir(td.path())).next().is_none());
+    assert!(t!(std_fs::read_dir(td.path())).next().is_none());
 }
 
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
@@ -2328,7 +2330,7 @@ async fn unpacked_modes_are_masked() {
     let tar = t!(ar.into_inner().await);
     let modes = |td: &TempDir| {
         ["dir", "dir/file"].map(|path| {
-            let meta = t!(std::fs::metadata(td.path().join(path)));
+            let meta = t!(std_fs::metadata(td.path().join(path)));
             meta.permissions().mode() & 0o777
         })
     };
@@ -2378,7 +2380,7 @@ async fn names_windows_reserves_are_rejected_on_windows() {
             Archive::new(&tar[..]).unpack(td.path()).await.is_err(),
             "{name}"
         );
-        assert!(t!(std::fs::read_dir(td.path())).next().is_none(), "{name}");
+        assert!(t!(std_fs::read_dir(td.path())).next().is_none(), "{name}");
     }
 }
 
@@ -2401,9 +2403,9 @@ async fn unpacked_files_are_complete_when_unpack_returns() {
     t!(Archive::new(&tar[..]).unpack(td.path()).await);
 
     let path = td.path().join("big.bin");
-    assert!(t!(std::fs::read(&path)) == data);
-    let expected = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
-    assert_eq!(t!(t!(std::fs::metadata(&path)).modified()), expected);
+    assert!(t!(std_fs::read(&path)) == data);
+    let expected = UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+    assert_eq!(t!(t!(std_fs::metadata(&path)).modified()), expected);
 }
 
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
@@ -2418,8 +2420,8 @@ async fn unpack_writes_the_files_before_a_corrupt_header() {
     let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
     assert!(Archive::new(&tar[..]).unpack(td.path()).await.is_err());
 
-    assert_eq!(t!(std::fs::read(td.path().join("first.txt"))), b"first\n");
-    assert_eq!(t!(std::fs::read(td.path().join("second.txt"))), b"second\n");
+    assert_eq!(t!(std_fs::read(td.path().join("first.txt"))), b"first\n");
+    assert_eq!(t!(std_fs::read(td.path().join("second.txt"))), b"second\n");
 }
 
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
@@ -2428,7 +2430,7 @@ async fn append_dir_all_archives_every_entry_of_a_large_directory() {
     let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
     let count = 2 * 4096 + 1;
     for i in 0..count {
-        t!(std::fs::write(td.path().join(format!("{i:05}")), b""));
+        t!(std_fs::write(td.path().join(format!("{i:05}")), b""));
     }
 
     let mut ar = Builder::new(Vec::new());
@@ -2485,6 +2487,9 @@ async fn base256_size_beyond_64_bits_is_rejected() {
 
     let too_large = build([0x80, 0, 0, 1, 0, 0, 0, 0, 0, 0, 2, 0]);
     assert!(is_rejected(&too_large).await);
+
+    let flag_with_bits = build([0x81, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0]);
+    assert!(is_rejected(&flag_with_bits).await);
 
     let fits = build([0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0]);
     assert_eq!(read_entries(&fits[..]).await[0].1.len(), BLOCK);

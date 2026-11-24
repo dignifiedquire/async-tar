@@ -1,5 +1,3 @@
-#![allow(clippy::cognitive_complexity)]
-
 use std::{
     fs::{self, File},
     io::{self, Write},
@@ -163,7 +161,7 @@ fn set_path() {
     assert!(h.set_path(&long_name).is_err());
     assert!(h.set_path(&medium1).is_err());
     t!(h.set_path(&medium2));
-    assert_eq!(t!(h.path()).to_str(), Some(&medium2[..]));
+    assert_eq!(t!(h.path()).to_str(), Some(medium2.as_str()));
 }
 
 #[test]
@@ -211,6 +209,10 @@ fn set_metadata_deterministic() {
 }
 
 #[test]
+#[expect(
+    unsafe_code,
+    reason = "builds a header of byte arrays, for which all zeros is valid"
+)]
 fn extended_numeric_format() {
     let mut h: GnuHeader = unsafe { mem::zeroed() };
     h.as_header_mut().set_size(42);

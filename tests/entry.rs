@@ -405,15 +405,12 @@ async fn modify_symlink_just_created() {
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
 #[cfg(unix)]
 async fn chmod_outside_with_directory_over_symlink() {
-    use ::std::os::unix::fs::PermissionsExt;
+    use std::{fs::Permissions, os::unix::fs::PermissionsExt};
 
     let td = t!(Builder::new().prefix("tar").tempdir());
     let outside = td.path().join("outside");
-    t!(std::fs::create_dir(&outside));
-    t!(std::fs::set_permissions(
-        &outside,
-        std::fs::Permissions::from_mode(0o700)
-    ));
+    t!(fs::create_dir(&outside).await);
+    t!(fs::set_permissions(&outside, Permissions::from_mode(0o700)).await);
 
     let mut ar = async_tar::Builder::new(Vec::new());
 
@@ -439,6 +436,6 @@ async fn chmod_outside_with_directory_over_symlink() {
     let tar_dir = td.path().join("tar");
     fs::create_dir(&tar_dir).await.unwrap();
     assert!(ar.unpack(tar_dir).await.is_err());
-    let mode = t!(std::fs::metadata(&outside)).permissions().mode();
+    let mode = t!(fs::metadata(&outside).await).permissions().mode();
     assert_eq!(mode & 0o777, 0o700);
 }

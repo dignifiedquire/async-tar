@@ -1,13 +1,19 @@
+#[cfg(feature = "runtime-tokio")]
+use std::thread;
 use std::{
     borrow::Cow,
-    fs::Metadata,
+    fs::{self as std_fs, Metadata},
+    mem,
     path::{Path, PathBuf},
 };
 
 #[cfg(feature = "runtime-smol")]
 use async_fs as fs;
 #[cfg(feature = "runtime-smol")]
-use futures_lite::io::{self, AsyncRead as Read, AsyncReadExt, AsyncWrite as Write, AsyncWriteExt};
+use futures_lite::{
+    future,
+    io::{self, AsyncRead as Read, AsyncReadExt, AsyncWrite as Write, AsyncWriteExt},
+};
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
     fs,
@@ -79,7 +85,7 @@ impl<W: ?Sized> MemberWrite<'_, W> {
     fn end(self) {
         // Forgetting the write skips its drop, so later writes still succeed. It holds
         // only a reference, so nothing leaks.
-        std::mem::forget(self);
+        mem::forget(self);
     }
 }
 
@@ -93,8 +99,8 @@ impl<W: Write + Unpin> Builder<W> {
     /// Create a new archive builder with the underlying object as the
     /// destination of all data written. The builder will use
     /// `HeaderMode::Complete` by default.
-    pub fn new(obj: W) -> Builder<W> {
-        Builder {
+    pub fn new(obj: W) -> Self {
+        Self {
             mode: HeaderMode::Complete,
             follow: true,
             finished: false,
@@ -119,6 +125,10 @@ impl<W: Write + Unpin> Builder<W> {
     }
 
     /// Gets shared reference to the underlying object.
+    #[expect(
+        clippy::unwrap_used,
+        reason = "obj is None only after into_inner, which consumes the builder"
+    )]
     pub fn get_ref(&self) -> &W {
         &self.obj.as_ref().unwrap().writer
     }
@@ -133,6 +143,10 @@ impl<W: Write + Unpin> Builder<W> {
         &mut self.output().writer
     }
 
+    #[expect(
+        clippy::unwrap_used,
+        reason = "obj is None only after into_inner, which consumes the builder"
+    )]
     fn output(&mut self) -> &mut Output<W> {
         self.obj.as_mut().unwrap()
     }
@@ -148,7 +162,10 @@ impl<W: Write + Unpin> Builder<W> {
         if !self.finished {
             self.finish().await?;
         }
-        Ok(self.obj.take().unwrap().writer)
+        let Some(output) = self.obj.take() else {
+            return Err(other("the builder's writer was already taken"));
+        };
+        Ok(output.writer)
     }
 
     /// Adds a new entry to this archive.
@@ -536,10 +553,9 @@ where
     }
 
     // Pad with zeros if necessary.
-    let buf = [0; 512];
-    let remaining = 512 - (len % 512);
-    if remaining < 512 {
-        dst.write_all(&buf[..remaining as usize]).await?;
+    let remaining = (512 - len % 512) % 512;
+    if let Some(zeros) = [0; 512].get(..remaining as usize) {
+        dst.write_all(zeros).await?;
     }
 
     Ok(())
@@ -624,7 +640,9 @@ async fn append_dir<W: Write + Unpin + ?Sized>(
 fn prepare_header(size: u64, entry_type: EntryType) -> Header {
     let mut header = Header::new_gnu();
     let name = b"././@LongLink";
-    header.as_gnu_mut().unwrap().name[..name.len()].clone_from_slice(&name[..]);
+    for (slot, byte) in header.as_old_mut().name.iter_mut().zip(name) {
+        *slot = *byte;
+    }
     header.set_mode(0o644);
     header.set_uid(0);
     header.set_gid(0);
@@ -650,13 +668,13 @@ async fn prepare_header_path<W: Write + Unpin + ?Sized>(
         let max = header.as_old().name.len();
         //  Since e isn't specific enough to let us know the path is indeed too
         //  long, verify it first before using the extension.
-        if data.len() < max {
+        let Some(truncated) = data.get(..max) else {
             return Err(e);
-        }
+        };
         // Truncate the path to store in the header we're about to emit to
         // ensure we've got something at least mentioned. It is checked before
         // the long name is written, so a rejected path leaves no long name.
-        let path = bytes2path(Cow::Borrowed(&data[..max]))?;
+        let path = bytes2path(Cow::Borrowed(truncated))?;
         header.set_truncated_path_for_gnu_header(&path)?;
         let header2 = prepare_header(data.len() as u64, EntryType::GNULongName);
         // null-terminated string
@@ -717,7 +735,7 @@ async fn append_dir_all<W: Write + Unpin + ?Sized>(
 ) -> io::Result<()> {
     let mut stack = vec![(src_path.to_path_buf(), true, false)];
     while let Some((src, is_dir, is_symlink)) = stack.pop() {
-        let dest = path.join(src.strip_prefix(src_path).unwrap());
+        let dest = path.join(src.strip_prefix(src_path).map_err(io::Error::other)?);
         if is_dir {
             let (stat, children) = read_dir_children(src, follow).await?;
             stack.extend(children);
@@ -726,7 +744,7 @@ async fn append_dir_all<W: Write + Unpin + ?Sized>(
             }
         } else if !follow && is_symlink {
             let (stat, link_name) = crate::unblock(move || {
-                Ok((std::fs::symlink_metadata(&src)?, std::fs::read_link(&src)?))
+                Ok((std_fs::symlink_metadata(&src)?, std_fs::read_link(&src)?))
             })
             .await?;
             append_fs(dst, &dest, &stat, &mut io::empty(), mode, Some(&link_name)).await?;
@@ -745,8 +763,8 @@ async fn append_dir_all<W: Write + Unpin + ?Sized>(
 /// Returns a directory's metadata and its children, read in chunks of [`DIR_CHUNK_SIZE`].
 async fn read_dir_children(dir: PathBuf, follow: bool) -> io::Result<(Metadata, Vec<Child>)> {
     let (stat, mut entries, (mut children, mut is_done)) = crate::unblock(move || {
-        let stat = std::fs::metadata(&dir)?;
-        let mut entries = std::fs::read_dir(&dir)?;
+        let stat = std_fs::metadata(&dir)?;
+        let mut entries = std_fs::read_dir(&dir)?;
         let first = read_children(&mut entries, follow)?;
         Ok((stat, entries, first))
     })
@@ -765,7 +783,7 @@ async fn read_dir_children(dir: PathBuf, follow: bool) -> io::Result<(Metadata, 
 }
 
 /// Reads up to [`DIR_CHUNK_SIZE`] children, and returns them with whether none are left.
-fn read_children(entries: &mut std::fs::ReadDir, follow: bool) -> io::Result<(Vec<Child>, bool)> {
+fn read_children(entries: &mut std_fs::ReadDir, follow: bool) -> io::Result<(Vec<Child>, bool)> {
     let mut children = Vec::new();
     for entry in entries.by_ref().take(DIR_CHUNK_SIZE) {
         let entry = entry?;
@@ -773,7 +791,7 @@ fn read_children(entries: &mut std::fs::ReadDir, follow: bool) -> io::Result<(Ve
         let path = entry.path();
         let is_symlink = file_type.is_symlink();
         let is_dir = file_type.is_dir()
-            || (follow && is_symlink && std::fs::metadata(&path).is_ok_and(|m| m.is_dir()));
+            || (follow && is_symlink && std_fs::metadata(&path).is_ok_and(|m| m.is_dir()));
         children.push((path, is_dir, is_symlink));
     }
     let is_done = children.len() < DIR_CHUNK_SIZE;
@@ -783,7 +801,7 @@ fn read_children(entries: &mut std::fs::ReadDir, follow: bool) -> io::Result<(Ve
 /// A file's contents, read whole when small, or the open file to stream.
 enum FileContents {
     Read(Vec<u8>),
-    Open(std::fs::File),
+    Open(std_fs::File),
 }
 
 /// Opens `path` and returns its metadata, reading a regular file of up to one copy chunk whole.
@@ -791,7 +809,7 @@ async fn open_file(path: PathBuf) -> io::Result<(Metadata, FileContents)> {
     use std::io::Read as _;
 
     crate::unblock(move || {
-        let file = std::fs::File::open(&path)?;
+        let file = std_fs::File::open(&path)?;
         let stat = file.metadata()?;
         if !stat.is_file() || stat.len() > crate::COPY_CHUNK_SIZE as u64 {
             return Ok((stat, FileContents::Open(file)));
@@ -807,7 +825,7 @@ async fn open_file(path: PathBuf) -> io::Result<(Metadata, FileContents)> {
 #[cfg(feature = "runtime-smol")]
 impl<W: Write + Unpin> Drop for Builder<W> {
     fn drop(&mut self) {
-        futures_lite::future::block_on(async move {
+        future::block_on(async move {
             let _ = self.finish().await;
         });
     }
@@ -815,9 +833,13 @@ impl<W: Write + Unpin> Drop for Builder<W> {
 
 #[cfg(feature = "runtime-tokio")]
 impl<W: Write + Unpin> Drop for Builder<W> {
+    #[expect(
+        clippy::panic,
+        reason = "tokio cannot finish the archive in drop, and the docs promise a panic instead"
+    )]
     fn drop(&mut self) {
         let is_poisoned = self.obj.as_ref().is_some_and(|output| output.is_poisoned);
-        if !self.finished && !is_poisoned && !std::thread::panicking() && self.obj.is_some() {
+        if !self.finished && !is_poisoned && !thread::panicking() && self.obj.is_some() {
             panic!("Builder dropped without finalizing; call finish() or into_inner()");
         }
     }
@@ -829,7 +851,7 @@ mod tests {
         cell::RefCell,
         pin::Pin,
         rc::Rc,
-        task::{Context, Poll},
+        task::{Context, Poll, Waker},
     };
 
     #[cfg(feature = "runtime-smol")]
@@ -915,7 +937,7 @@ mod tests {
     )]
     #[cfg_attr(feature = "runtime-tokio", tokio::test)]
     async fn rejected_link_name_leaves_no_long_name() {
-        let meta = std::fs::metadata("Cargo.toml").unwrap();
+        let meta = std_fs::metadata("Cargo.toml").unwrap();
         let path = Path::new("a").join("b".repeat(200));
         let mut dst = Output {
             is_poisoned: false,
@@ -1035,7 +1057,7 @@ mod tests {
             fail_past: Some(0),
             is_stuck: true,
         });
-        let mut cx = Context::from_waker(std::task::Waker::noop());
+        let mut cx = Context::from_waker(Waker::noop());
         let header = member("a", 0);
         {
             let mut append = std::pin::pin!(ar.append(&header, &[][..]));

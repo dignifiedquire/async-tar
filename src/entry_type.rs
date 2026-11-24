@@ -44,148 +44,148 @@ impl EntryType {
     ///
     /// Note that the other named constructors of entry type may be more
     /// appropriate to create a file type from.
-    pub fn new(byte: u8) -> EntryType {
+    pub fn new(byte: u8) -> Self {
         match byte {
-            b'\x00' | b'0' => EntryType::Regular,
-            b'1' => EntryType::Link,
-            b'2' => EntryType::Symlink,
-            b'3' => EntryType::Char,
-            b'4' => EntryType::Block,
-            b'5' => EntryType::Directory,
-            b'6' => EntryType::Fifo,
-            b'7' => EntryType::Continuous,
-            b'x' => EntryType::XHeader,
-            b'g' => EntryType::XGlobalHeader,
-            b'L' => EntryType::GNULongName,
-            b'K' => EntryType::GNULongLink,
-            b'S' => EntryType::GNUSparse,
-            other => EntryType::Other(other),
+            b'\x00' | b'0' => Self::Regular,
+            b'1' => Self::Link,
+            b'2' => Self::Symlink,
+            b'3' => Self::Char,
+            b'4' => Self::Block,
+            b'5' => Self::Directory,
+            b'6' => Self::Fifo,
+            b'7' => Self::Continuous,
+            b'x' => Self::XHeader,
+            b'g' => Self::XGlobalHeader,
+            b'L' => Self::GNULongName,
+            b'K' => Self::GNULongLink,
+            b'S' => Self::GNUSparse,
+            other => Self::Other(other),
         }
     }
 
     /// Returns the raw underlying byte that this entry type represents.
     pub fn as_byte(self) -> u8 {
         match self {
-            EntryType::Regular => b'0',
-            EntryType::Link => b'1',
-            EntryType::Symlink => b'2',
-            EntryType::Char => b'3',
-            EntryType::Block => b'4',
-            EntryType::Directory => b'5',
-            EntryType::Fifo => b'6',
-            EntryType::Continuous => b'7',
-            EntryType::XHeader => b'x',
-            EntryType::XGlobalHeader => b'g',
-            EntryType::GNULongName => b'L',
-            EntryType::GNULongLink => b'K',
-            EntryType::GNUSparse => b'S',
-            EntryType::Other(other) => other,
+            Self::Regular => b'0',
+            Self::Link => b'1',
+            Self::Symlink => b'2',
+            Self::Char => b'3',
+            Self::Block => b'4',
+            Self::Directory => b'5',
+            Self::Fifo => b'6',
+            Self::Continuous => b'7',
+            Self::XHeader => b'x',
+            Self::XGlobalHeader => b'g',
+            Self::GNULongName => b'L',
+            Self::GNULongLink => b'K',
+            Self::GNUSparse => b'S',
+            Self::Other(other) => other,
         }
     }
 
     /// Creates a new entry type representing a regular file.
-    pub fn file() -> EntryType {
-        EntryType::Regular
+    pub fn file() -> Self {
+        Self::Regular
     }
 
     /// Creates a new entry type representing a hard link.
-    pub fn hard_link() -> EntryType {
-        EntryType::Link
+    pub fn hard_link() -> Self {
+        Self::Link
     }
 
     /// Creates a new entry type representing a symlink.
-    pub fn symlink() -> EntryType {
-        EntryType::Symlink
+    pub fn symlink() -> Self {
+        Self::Symlink
     }
 
     /// Creates a new entry type representing a character special device.
-    pub fn character_special() -> EntryType {
-        EntryType::Char
+    pub fn character_special() -> Self {
+        Self::Char
     }
 
     /// Creates a new entry type representing a block special device.
-    pub fn block_special() -> EntryType {
-        EntryType::Block
+    pub fn block_special() -> Self {
+        Self::Block
     }
 
     /// Creates a new entry type representing a directory.
-    pub fn dir() -> EntryType {
-        EntryType::Directory
+    pub fn dir() -> Self {
+        Self::Directory
     }
 
     /// Creates a new entry type representing a FIFO.
-    pub fn fifo() -> EntryType {
-        EntryType::Fifo
+    pub fn fifo() -> Self {
+        Self::Fifo
     }
 
     /// Creates a new entry type representing a contiguous file.
-    pub fn contiguous() -> EntryType {
-        EntryType::Continuous
+    pub fn contiguous() -> Self {
+        Self::Continuous
     }
 
     /// Returns whether this type represents a regular file.
     pub fn is_file(self) -> bool {
-        self == EntryType::Regular
+        self == Self::Regular
     }
 
     /// Returns whether this type represents a hard link.
     pub fn is_hard_link(self) -> bool {
-        self == EntryType::Link
+        self == Self::Link
     }
 
     /// Returns whether this type represents a symlink.
     pub fn is_symlink(self) -> bool {
-        self == EntryType::Symlink
+        self == Self::Symlink
     }
 
     /// Returns whether this type represents a character special device.
     pub fn is_character_special(self) -> bool {
-        self == EntryType::Char
+        self == Self::Char
     }
 
     /// Returns whether this type represents a block special device.
     pub fn is_block_special(self) -> bool {
-        self == EntryType::Block
+        self == Self::Block
     }
 
     /// Returns whether this type represents a directory.
     pub fn is_dir(self) -> bool {
-        self == EntryType::Directory
+        self == Self::Directory
     }
 
     /// Returns whether this type represents a FIFO.
     pub fn is_fifo(self) -> bool {
-        self == EntryType::Fifo
+        self == Self::Fifo
     }
 
     /// Returns whether this type represents a contiguous file.
     pub fn is_contiguous(self) -> bool {
-        self == EntryType::Continuous
+        self == Self::Continuous
     }
 
     /// Returns whether this type represents a GNU long name header.
     pub fn is_gnu_longname(self) -> bool {
-        self == EntryType::GNULongName
+        self == Self::GNULongName
     }
 
     /// Returns whether this type represents a GNU sparse header.
     pub fn is_gnu_sparse(self) -> bool {
-        self == EntryType::GNUSparse
+        self == Self::GNUSparse
     }
 
     /// Returns whether this type represents a GNU long link header.
     pub fn is_gnu_longlink(self) -> bool {
-        self == EntryType::GNULongLink
+        self == Self::GNULongLink
     }
 
     /// Returns whether this type represents a GNU long name header.
     pub fn is_pax_global_extensions(self) -> bool {
-        self == EntryType::XGlobalHeader
+        self == Self::XGlobalHeader
     }
 
     /// Returns whether this type represents a GNU long link header.
     pub fn is_pax_local_extensions(self) -> bool {
-        self == EntryType::XHeader
+        self == Self::XHeader
     }
 
     /// Returns whether this type carries only metadata, such as a GNU volume label (V).

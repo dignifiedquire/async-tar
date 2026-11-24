@@ -1,12 +1,12 @@
 #[cfg(feature = "runtime-tokio")]
 use std::mem::MaybeUninit;
 use std::{
-    cmp,
     collections::VecDeque,
     iter, mem,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, Mutex},
+    str,
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
     task::{Context, Poll},
 };
 
@@ -31,7 +31,7 @@ use crate::{
     entry::{EntryFields, EntryIo, SmallFile},
     error::TarError,
     fs_canonicalize, other,
-    pax::pax_extensions,
+    pax::{self, pax_extensions},
     symlink_metadata,
 };
 
@@ -55,14 +55,14 @@ pub struct Archive<R: Read + Unpin> {
 
 impl<R: Read + Unpin> Clone for Archive<R> {
     fn clone(&self) -> Self {
-        Archive {
+        Self {
             inner: self.inner.clone(),
         }
     }
 }
 
 #[derive(Debug)]
-pub struct ArchiveInner<R: Read + Unpin> {
+pub(crate) struct ArchiveInner<R: Read + Unpin> {
     pos: u64,
     unpack_xattrs: bool,
     preserve_permissions: bool,
@@ -95,7 +95,7 @@ pub struct ArchiveBuilder<R: Read + Unpin> {
 impl<R: Read + Unpin> ArchiveBuilder<R> {
     /// Create a new builder.
     pub fn new(obj: R) -> Self {
-        ArchiveBuilder {
+        Self {
             unpack_xattrs: false,
             preserve_permissions: false,
             mask: 0o022,
@@ -227,16 +227,26 @@ impl<R: Read + Unpin> ArchiveBuilder<R> {
 
 impl<R: Read + Unpin> Archive<R> {
     /// Create a new archive with the underlying object as the reader.
-    pub fn new(obj: R) -> Archive<R> {
+    pub fn new(obj: R) -> Self {
         ArchiveBuilder::new(obj).build()
     }
 
     /// Unwrap this archive, returning the underlying object.
     pub fn into_inner(self) -> Result<R, Self> {
         match Arc::try_unwrap(self.inner) {
-            Ok(inner) => Ok(inner.into_inner().unwrap().obj),
+            Ok(inner) => Ok(inner
+                .into_inner()
+                .unwrap_or_else(PoisonError::into_inner)
+                .obj),
             Err(inner) => Err(Self { inner }),
         }
+    }
+
+    /// Locks the archive's state, failing once a panic in its reader poisoned the lock.
+    fn lock(&self) -> io::Result<MutexGuard<'_, ArchiveInner<R>>> {
+        self.inner
+            .lock()
+            .map_err(|_| other("the archive's reader panicked while it was in use"))
     }
 
     /// Construct an stream over the entries in this archive.
@@ -246,7 +256,7 @@ impl<R: Read + Unpin> Archive<R> {
     /// stream returns), then the contents read for each entry may be
     /// corrupted. The stream ends after its first error.
     pub fn entries(self) -> io::Result<Entries<R>> {
-        if self.inner.lock().unwrap().pos != 0 {
+        if self.lock()?.pos != 0 {
             return Err(other(
                 "cannot call entries unless archive is at \
                  position 0",
@@ -273,7 +283,7 @@ impl<R: Read + Unpin> Archive<R> {
     /// stream returns), then the contents read for each entry may be
     /// corrupted. The stream ends after its first error.
     pub fn entries_raw(self) -> io::Result<RawEntries<R>> {
-        if self.inner.lock().unwrap().pos != 0 {
+        if self.lock()?.pos != 0 {
             return Err(other(
                 "cannot call entries_raw unless archive is at \
                  position 0",
@@ -379,7 +389,7 @@ struct SmallFiles {
 
 impl SmallFiles {
     fn new(canon_dst: PathBuf) -> Self {
-        SmallFiles {
+        Self {
             canon_dst,
             files: Vec::new(),
             size: 0,
@@ -482,9 +492,7 @@ impl<R: Read + Unpin> Entries<R> {
                 ..
             } = current;
 
-            let new_fields = if let Some(fields) = fields.as_mut() {
-                fields
-            } else {
+            let Some(new_fields) = fields.as_mut() else {
                 *fields = Some(EntryFields::from(ready_opt_err!(poll_next_raw(
                     archive,
                     next,
@@ -590,7 +598,7 @@ impl<R: Read + Unpin> Entries<R> {
             if is_global && new_fields.pax_extensions.is_none() {
                 ready_err!(Pin::new(&mut *new_fields).poll_read_all(cx, extension_body));
                 let records = mem::take(extension_body);
-                for record in crate::pax::pax_extensions(&records) {
+                for record in pax::pax_extensions(&records) {
                     let record = record.map_err(|_e| other("pax extensions invalid"))?;
                     if matches!(record.key_bytes(), b"size" | b"path" | b"linkpath") {
                         return Poll::Ready(Some(Err(other(
@@ -677,7 +685,7 @@ impl<R: Read + Unpin> Entries<R> {
             // A link's target must be UTF-8.
             let is_target_utf8 = new_fields
                 .link_name_bytes()
-                .is_none_or(|target| std::str::from_utf8(&target).is_ok());
+                .is_none_or(|target| str::from_utf8(&target).is_ok());
             if is_link && !is_target_utf8 {
                 return Poll::Ready(Some(Err(other("a link target that is not UTF-8"))));
             }
@@ -699,7 +707,12 @@ impl<R: Read + Unpin> Entries<R> {
                 cx
             ));
 
-            return Poll::Ready(Some(Ok(fields.take().unwrap().into_entry())));
+            let Some(fields) = fields.take() else {
+                return Poll::Ready(Some(Err(other(
+                    "archive entry was taken before it was complete",
+                ))));
+            };
+            return Poll::Ready(Some(Ok(fields.into_entry())));
         }
     }
 }
@@ -757,32 +770,38 @@ fn poll_next_raw<R: Read + Unpin>(
 ) -> Poll<Option<io::Result<Entry<Archive<R>>>>> {
     let mut header_pos = *next;
 
-    loop {
+    // The header being read is parked in `current_header` only while a read is pending.
+    let mut header = loop {
         let archive = archive.clone();
-        // Seek to the start of the next header in the archive
-        if current_header.is_none() {
-            let delta = *next - archive.inner.lock().unwrap().pos;
-            match ready!(poll_skip(archive.clone(), cx, delta)) {
-                Ok(_) => {}
-                Err(err) => return Poll::Ready(Some(Err(err))),
+        let mut header = match current_header.take() {
+            Some(header) => header,
+            None => {
+                // Seek to the start of the next header in the archive
+                let delta = *next - archive.lock()?.pos;
+                match ready!(poll_skip(archive.clone(), cx, delta)) {
+                    Ok(_) => {}
+                    Err(err) => return Poll::Ready(Some(Err(err))),
+                }
+                *current_header_pos = 0;
+                Header::new_old()
             }
-
-            *current_header = Some(Header::new_old());
-            *current_header_pos = 0;
-        }
-
-        let header = current_header.as_mut().unwrap();
+        };
 
         // EOF is an indicator that we are at the end of the archive.
-        match ready!(poll_try_read_all(
+        let read = poll_try_read_all(
             archive.clone(),
             cx,
             header.as_mut_bytes(),
             current_header_pos,
-        )) {
-            Ok(true) => {}
-            Ok(false) => return Poll::Ready(None),
-            Err(err) => return Poll::Ready(Some(Err(err))),
+        );
+        match read {
+            Poll::Pending => {
+                *current_header = Some(header);
+                return Poll::Pending;
+            }
+            Poll::Ready(Ok(true)) => {}
+            Poll::Ready(Ok(false)) => return Poll::Ready(None),
+            Poll::Ready(Err(err)) => return Poll::Ready(Some(Err(err))),
         }
 
         // If a header is not all zeros, we have another valid header.
@@ -790,18 +809,16 @@ fn poll_next_raw<R: Read + Unpin>(
         // end of the archive.
         if !header.as_bytes().iter().all(|i| *i == 0) {
             *next += 512;
-            break;
+            break header;
         }
 
-        if !archive.inner.lock().unwrap().ignore_zeros {
+        if !archive.lock()?.ignore_zeros {
             return Poll::Ready(None);
         }
 
         *next += 512;
         header_pos = *next;
-    }
-
-    let header = current_header.as_mut().unwrap();
+    };
 
     // Make sure the checksum is ok
     let sum = header.as_bytes()[..148]
@@ -822,8 +839,6 @@ fn poll_next_raw<R: Read + Unpin>(
     }
 
     let file_pos = *next;
-
-    let mut header = current_header.take().unwrap();
 
     // when pax extensions are available, the size should come from there.
     let mut size = header.entry_size()?;
@@ -917,7 +932,8 @@ fn poll_next_raw<R: Read + Unpin>(
 
     // Extension bodies are read into memory, so their sizes are checked first.
     {
-        let inner = &mut *archive.inner.lock().unwrap();
+        let mut guard = archive.lock()?;
+        let inner = &mut *guard;
         let is_gnu_extension = entry_type.is_gnu_longname() || entry_type.is_gnu_longlink();
         if is_gnu_extension && size > inner.max_gnu_extension_size {
             return Poll::Ready(Some(Err(other(
@@ -946,7 +962,7 @@ fn poll_next_raw<R: Read + Unpin>(
         preserve_permissions,
         mask,
         ..
-    } = &*archive.inner.lock().unwrap();
+    } = &*archive.lock()?;
 
     let ret = EntryFields {
         size,
@@ -994,9 +1010,8 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
         return Poll::Ready(Ok(()));
     }
 
-    let gnu = match entry.header.as_gnu() {
-        Some(gnu) => gnu,
-        None => return Poll::Ready(Err(other("sparse entry type listed but not GNU header"))),
+    let Some(gnu) = entry.header.as_gnu() else {
+        return Poll::Ready(Err(other("sparse entry type listed but not GNU header")));
     };
 
     // Sparse files are represented internally as a list of blocks that are
@@ -1023,9 +1038,9 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
     // read resumes the headers without dropping the blocks of earlier ones.
     while ext_headers
         .last()
-        .map_or(gnu.is_extended(), |ext| ext.is_extended())
+        .map_or_else(|| gnu.is_extended(), |ext| ext.is_extended())
     {
-        let max_map_size = archive.inner.lock().unwrap().max_gnu_sparse_map_size;
+        let max_map_size = archive.lock()?.max_gnu_sparse_map_size;
         if (ext_headers.len() as u64 + 1).saturating_mul(512) > max_map_size {
             return Poll::Ready(Err(other("a GNU sparse map over its size limit")));
         }
@@ -1136,7 +1151,7 @@ impl<R: Read + Unpin> Read for Archive<R> {
         cx: &mut Context<'_>,
         into: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        let mut lock = self.inner.lock().unwrap();
+        let mut lock = self.lock()?;
         let mut inner = Pin::new(&mut *lock);
         let r = Pin::new(&mut inner.obj);
 
@@ -1156,9 +1171,9 @@ impl<R: Read + Unpin> Read for Archive<R> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        into: &mut tokio::io::ReadBuf,
+        into: &mut io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let mut lock = self.inner.lock().unwrap();
+        let mut lock = self.lock()?;
         let mut inner = Pin::new(&mut *lock);
         let r = Pin::new(&mut inner.obj);
 
@@ -1185,8 +1200,8 @@ fn poll_try_read_all<R: Read + Unpin>(
     buf: &mut [u8],
     pos: &mut usize,
 ) -> Poll<io::Result<bool>> {
-    while *pos < buf.len() {
-        match ready!(Pin::new(&mut source).poll_read(cx, &mut buf[*pos..])) {
+    while let Some(rest) = buf.get_mut(*pos..).filter(|rest| !rest.is_empty()) {
+        match ready!(Pin::new(&mut source).poll_read(cx, rest)) {
             Ok(0) => {
                 if *pos == 0 {
                     return Poll::Ready(Ok(false));
@@ -1210,8 +1225,8 @@ fn poll_try_read_all<R: Read + Unpin>(
     buf: &mut [u8],
     pos: &mut usize,
 ) -> Poll<io::Result<bool>> {
-    while *pos < buf.len() {
-        let mut read_buf = io::ReadBuf::new(&mut buf[*pos..]);
+    while let Some(rest) = buf.get_mut(*pos..).filter(|rest| !rest.is_empty()) {
+        let mut read_buf = io::ReadBuf::new(rest);
         let start = read_buf.filled().len();
         match ready!(Pin::new(&mut source).poll_read(cx, &mut read_buf)) {
             Ok(()) => {
@@ -1243,8 +1258,8 @@ fn poll_skip<R: Read + Unpin>(
 ) -> Poll<io::Result<()>> {
     let mut buf = [0u8; 4096 * 8];
     while amt > 0 {
-        let n = cmp::min(amt, buf.len() as u64);
-        match ready!(Pin::new(&mut source).poll_read(cx, &mut buf[..n as usize])) {
+        let mut limited = (&mut source).take(amt);
+        match ready!(Pin::new(&mut limited).poll_read(cx, &mut buf)) {
             Ok(0) => {
                 return Poll::Ready(Err(other("unexpected EOF during skip")));
             }
@@ -1268,8 +1283,9 @@ fn poll_skip<R: Read + Unpin>(
     // The skipped bytes are never read, so the buffer is left uninitialized.
     let mut buf = [MaybeUninit::<u8>::uninit(); 4096 * 8];
     while amt > 0 {
-        let n = cmp::min(amt, buf.len() as u64);
-        let mut read_buf = io::ReadBuf::uninit(&mut buf[..n as usize]);
+        let n = amt.min(buf.len() as u64) as usize;
+        let mut whole = io::ReadBuf::uninit(&mut buf);
+        let mut read_buf = whole.take(n);
         let start = read_buf.filled().len();
         match ready!(Pin::new(&mut source).poll_read(cx, &mut read_buf)) {
             Ok(()) => {

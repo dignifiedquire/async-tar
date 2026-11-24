@@ -1,12 +1,10 @@
-#[cfg(unix)]
-use std::fs::Permissions;
 use std::{
     borrow::Cow,
     cmp,
     collections::VecDeque,
     ffi::OsStr,
     fmt,
-    fs::FileTimes,
+    fs::{self as std_fs, FileTimes, OpenOptions},
     marker,
     path::{Component, Path, PathBuf},
     pin::Pin,
@@ -21,6 +19,8 @@ use futures_core::ready;
 use futures_lite::io::{
     self, AsyncRead as Read, AsyncReadExt, AsyncSeekExt, Error, ErrorKind, SeekFrom,
 };
+#[cfg(unix)]
+use std_fs::Permissions;
 #[cfg(feature = "runtime-tokio")]
 use tokio::{
     fs,
@@ -52,7 +52,7 @@ impl<R: Read + Unpin> fmt::Debug for Entry<R> {
 
 // private implementation detail of `Entry`, but concrete (no type parameters)
 // and also all-public to be constructed from other modules.
-pub struct EntryFields<R: Read + Unpin> {
+pub(crate) struct EntryFields<R: Read + Unpin> {
     pub long_pathname: Option<Vec<u8>>,
     pub long_linkname: Option<Vec<u8>>,
     pub pax_extensions: Option<Vec<u8>>,
@@ -88,7 +88,7 @@ impl<R: Read + Unpin> fmt::Debug for EntryFields<R> {
     }
 }
 
-pub enum EntryIo<R: Read + Unpin> {
+pub(crate) enum EntryIo<R: Read + Unpin> {
     Pad(io::Take<io::Repeat>),
     Data(io::Take<R>),
 }
@@ -96,8 +96,8 @@ pub enum EntryIo<R: Read + Unpin> {
 impl<R: Read + Unpin> fmt::Debug for EntryIo<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EntryIo::Pad(_) => write!(f, "EntryIo::Pad"),
-            EntryIo::Data(_) => write!(f, "EntryIo::Data"),
+            Self::Pad(_) => write!(f, "EntryIo::Pad"),
+            Self::Data(_) => write!(f, "EntryIo::Data"),
         }
     }
 }
@@ -357,18 +357,18 @@ impl<R: Read + Unpin> Read for Entry<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        into: &mut tokio::io::ReadBuf,
+        into: &mut io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         Pin::new(&mut self.fields).poll_read(cx, into)
     }
 }
 
 impl<R: Read + Unpin> EntryFields<R> {
-    pub fn from(entry: Entry<R>) -> Self {
+    pub(crate) fn from(entry: Entry<R>) -> Self {
         entry.fields
     }
 
-    pub fn into_entry(self) -> Entry<R> {
+    pub(crate) fn into_entry(self) -> Entry<R> {
         Entry {
             fields: self,
             _ignored: marker::PhantomData,
@@ -391,7 +391,7 @@ impl<R: Read + Unpin> EntryFields<R> {
         Poll::Ready(Ok(()))
     }
 
-    pub async fn read_all(&mut self) -> io::Result<Vec<u8>> {
+    pub(crate) async fn read_all(&mut self) -> io::Result<Vec<u8>> {
         // Preallocate some data but don't let ourselves get too crazy now.
         let cap = cmp::min(self.size, 128 * 1024);
         let mut v = Vec::with_capacity(cap as usize);
@@ -404,11 +404,7 @@ impl<R: Read + Unpin> EntryFields<R> {
 
     pub(crate) fn path_bytes(&self) -> Cow<'_, [u8]> {
         if let Some(ref bytes) = self.long_pathname {
-            if let Some(&0) = bytes.last() {
-                Cow::Borrowed(&bytes[..bytes.len() - 1])
-            } else {
-                Cow::Borrowed(bytes)
-            }
+            Cow::Borrowed(bytes.strip_suffix(&[0]).unwrap_or(bytes))
         } else {
             if let Some(field) = self.pax_value(b"path") {
                 return Cow::Borrowed(field);
@@ -441,13 +437,7 @@ impl<R: Read + Unpin> EntryFields<R> {
 
     pub(crate) fn link_name_bytes(&self) -> Option<Cow<'_, [u8]>> {
         match self.long_linkname {
-            Some(ref bytes) => {
-                if let Some(&0) = bytes.last() {
-                    Some(Cow::Borrowed(&bytes[..bytes.len() - 1]))
-                } else {
-                    Some(Cow::Borrowed(bytes))
-                }
-            }
+            Some(ref bytes) => Some(Cow::Borrowed(bytes.strip_suffix(&[0]).unwrap_or(bytes))),
             None => match self.pax_value(b"linkpath") {
                 Some(field) => Some(Cow::Borrowed(field)),
                 None => self.header.link_name_bytes(),
@@ -456,15 +446,18 @@ impl<R: Read + Unpin> EntryFields<R> {
     }
 
     async fn pax_extensions(&mut self) -> io::Result<Option<PaxExtensions<'_>>> {
-        if self.pax_extensions.is_none() {
-            if !self.header.entry_type().is_pax_global_extensions()
-                && !self.header.entry_type().is_pax_local_extensions()
-            {
-                return Ok(None);
+        let records = match self.pax_extensions.take() {
+            Some(records) => records,
+            None => {
+                if !self.header.entry_type().is_pax_global_extensions()
+                    && !self.header.entry_type().is_pax_local_extensions()
+                {
+                    return Ok(None);
+                }
+                self.read_all().await?
             }
-            self.pax_extensions = Some(self.read_all().await?);
-        }
-        Ok(Some(pax_extensions(self.pax_extensions.as_ref().unwrap())))
+        };
+        Ok(Some(pax_extensions(self.pax_extensions.insert(records))))
     }
 
     async fn unpack_in(&mut self, dst: &Path, canon_dst: Option<&Path>) -> io::Result<bool> {
@@ -484,9 +477,8 @@ impl<R: Read + Unpin> EntryFields<R> {
         }
 
         // Skip entries without a parent (i.e. outside of FS root)
-        let parent = match file_dst.parent() {
-            Some(p) => p,
-            None => return Ok(false),
+        let Some(parent) = file_dst.parent() else {
+            return Ok(false);
         };
 
         let canon_dst = match canon_dst {
@@ -680,14 +672,11 @@ impl<R: Read + Unpin> EntryFields<R> {
             }
             return Ok(Unpacked::Other);
         } else if kind.is_hard_link() || kind.is_symlink() {
-            let src = match self.link_name()? {
-                Some(name) => name,
-                None => {
-                    return Err(other(&format!(
-                        "hard link listed for {} but no link name found",
-                        String::from_utf8_lossy(self.header.as_bytes())
-                    )));
-                }
+            let Some(src) = self.link_name()? else {
+                return Err(other(&format!(
+                    "hard link listed for {} but no link name found",
+                    String::from_utf8_lossy(self.header.as_bytes())
+                )));
             };
 
             if src.iter().count() == 0 {
@@ -745,31 +734,28 @@ impl<R: Read + Unpin> EntryFields<R> {
             return Ok(Unpacked::Other);
 
             #[cfg(target_arch = "wasm32")]
-            #[allow(unused_variables)]
-            async fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
-                Err(io::Error::new(io::ErrorKind::Other, "Not implemented"))
+            #[expect(
+                clippy::unused_async,
+                reason = "keeps the signature of the other platforms"
+            )]
+            async fn symlink(_src: &Path, _dst: &Path) -> io::Result<()> {
+                Err(io::Error::other("Not implemented"))
             }
 
             #[cfg(windows)]
             async fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
                 #[cfg(feature = "runtime-smol")]
-                {
-                    async_fs::windows::symlink_file(src, dst).await
-                }
-                #[cfg(feature = "runtime-tokio")]
-                {
-                    tokio::fs::symlink_file(src, dst).await
-                }
+                use async_fs::windows as fs;
+
+                fs::symlink_file(src, dst).await
             }
 
             #[cfg(any(unix, target_os = "redox"))]
             async fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
                 #[cfg(feature = "runtime-smol")]
-                async_fs::unix::symlink(src, dst).await?;
-                #[cfg(feature = "runtime-tokio")]
-                tokio::fs::symlink(src, dst).await?;
+                use async_fs::unix as fs;
 
-                Ok(())
+                fs::symlink(src, dst).await
             }
         } else if kind.is_metadata() {
             return Ok(Unpacked::Other);
@@ -816,7 +802,7 @@ impl<R: Read + Unpin> EntryFields<R> {
 
         let mut f = async {
             let dst = dst.to_path_buf();
-            let mut f = fs::File::from(crate::unblock(move || create_new_replacing(&dst)).await?);
+            let mut f = fs::File::from(crate::unblock(move || create_or_replace(&dst)).await?);
             for io in self.data.drain(..) {
                 match io {
                     EntryIo::Data(mut d) => {
@@ -850,7 +836,7 @@ impl<R: Read + Unpin> EntryFields<R> {
 
         if let Some(mtime) = mtime {
             let times = FileTimes::new().set_accessed(mtime).set_modified(mtime);
-            std::fs::OpenOptions::new()
+            OpenOptions::new()
                 .write(true)
                 .open(dst)
                 .and_then(|file| file.set_times(times))
@@ -937,15 +923,18 @@ impl<R: Read + Unpin> EntryFields<R> {
         }
 
         #[cfg(target_arch = "wasm32")]
-        #[allow(unused_variables)]
+        #[expect(
+            clippy::unused_async,
+            reason = "keeps the signature of the other platforms"
+        )]
         async fn _set_perms(
-            dst: &Path,
-            f: Option<&mut fs::File>,
-            mode: u32,
+            _dst: &Path,
+            _f: Option<&mut fs::File>,
+            _mode: u32,
             _preserve: bool,
             _mask: u32,
         ) -> io::Result<()> {
-            Err(io::Error::new(io::ErrorKind::Other, "Not implemented"))
+            Err(io::Error::other("Not implemented"))
         }
 
         #[cfg(all(unix, feature = "xattr"))]
@@ -955,20 +944,14 @@ impl<R: Read + Unpin> EntryFields<R> {
         ) -> io::Result<()> {
             use std::{ffi::OsStr, os::unix::prelude::*};
 
-            let exts = match me.pax_extensions().await {
-                Ok(Some(e)) => e,
-                _ => return Ok(()),
+            let Ok(Some(exts)) = me.pax_extensions().await else {
+                return Ok(());
             };
             let exts = exts
                 .filter_map(Result::ok)
                 .filter_map(|e| {
-                    let key = e.key_bytes();
-                    let prefix = b"SCHILY.xattr.";
-                    if key.starts_with(prefix) {
-                        Some((&key[prefix.len()..], e))
-                    } else {
-                        None
-                    }
+                    let key = e.key_bytes().strip_prefix(b"SCHILY.xattr.")?;
+                    Some((key, e))
                 })
                 .map(|(key, e)| (OsStr::from_bytes(key), e.value_bytes()));
 
@@ -998,8 +981,10 @@ impl<R: Read + Unpin> EntryFields<R> {
             not(feature = "xattr"),
             target_arch = "wasm32"
         ))]
-        // This keeps the async signature of the xattr version.
-        #[allow(clippy::unused_async)]
+        #[expect(
+            clippy::unused_async,
+            reason = "keeps the async signature of the xattr version"
+        )]
         async fn set_xattrs<R: Read + Unpin>(_: &mut EntryFields<R>, _: &Path) -> io::Result<()> {
             Ok(())
         }
@@ -1024,7 +1009,7 @@ impl SmallFile {
     }
 
     /// Creates the file's missing parent directories inside `canon_dst`, then writes it.
-    pub(crate) fn unpack_in(&self, canon_dst: &Path) -> io::Result<std::fs::File> {
+    pub(crate) fn unpack_in(&self, canon_dst: &Path) -> io::Result<std_fs::File> {
         if let Some(parent) = self.dst.parent() {
             create_dir_inside(canon_dst, parent)?;
         }
@@ -1034,7 +1019,7 @@ impl SmallFile {
     }
 
     /// Writes the file with its mtime and permissions, replacing anything at its path.
-    fn write(&self) -> io::Result<std::fs::File> {
+    fn write(&self) -> io::Result<std_fs::File> {
         let file = self.write_data().map_err(|e| {
             TarError::new(
                 &format!(
@@ -1060,11 +1045,11 @@ impl SmallFile {
         Ok(file)
     }
 
-    fn write_data(&self) -> io::Result<std::fs::File> {
+    fn write_data(&self) -> io::Result<std_fs::File> {
         use std::io::Write as _;
 
         // A new file is created, unlinking any existing one, since writing in place is attackable.
-        let mut file = create_new_replacing(&self.dst)?;
+        let mut file = create_or_replace(&self.dst)?;
         file.write_all(&self.data)?;
         if let Some(mtime) = self.mtime {
             let times = FileTimes::new().set_accessed(mtime).set_modified(mtime);
@@ -1091,7 +1076,7 @@ fn create_missing_dirs(canon_dst: &Path, dir: &Path) -> io::Result<()> {
     let mut dirs_to_create = Vec::new();
 
     // Any error but NotFound, such as a path too long for the OS, ends the walk.
-    while let Err(err) = std::fs::symlink_metadata(ancestor) {
+    while let Err(err) = std_fs::symlink_metadata(ancestor) {
         if err.kind() != ErrorKind::NotFound {
             return Err(err);
         }
@@ -1106,14 +1091,14 @@ fn create_missing_dirs(canon_dst: &Path, dir: &Path) -> io::Result<()> {
         if let Some(parent) = ancestor.parent() {
             validate_inside_dst(canon_dst, parent)?;
         }
-        std::fs::create_dir(ancestor)?;
+        std_fs::create_dir(ancestor)?;
     }
     Ok(())
 }
 
 fn validate_inside_dst(canon_dst: &Path, file_dst: &Path) -> io::Result<()> {
     // Abort if target (canonical) parent is outside of `dst`
-    let canon_parent = std::fs::canonicalize(file_dst).map_err(|err| {
+    let canon_parent = std_fs::canonicalize(file_dst).map_err(|err| {
         Error::new(
             err.kind(),
             format!("{} while canonicalizing {}", err, file_dst.display()),
@@ -1134,7 +1119,7 @@ fn validate_inside_dst(canon_dst: &Path, file_dst: &Path) -> io::Result<()> {
 }
 
 #[cfg(any(unix, target_os = "redox"))]
-fn set_file_perms(file: &std::fs::File, mode: u32, preserve: bool, mask: u32) -> io::Result<()> {
+fn set_file_perms(file: &std_fs::File, mode: u32, preserve: bool, mask: u32) -> io::Result<()> {
     use std::os::unix::prelude::*;
 
     let mode = if preserve { mode } else { mode & 0o777 } & !mask;
@@ -1142,7 +1127,7 @@ fn set_file_perms(file: &std::fs::File, mode: u32, preserve: bool, mask: u32) ->
 }
 
 #[cfg(windows)]
-fn set_file_perms(file: &std::fs::File, mode: u32, _preserve: bool, _mask: u32) -> io::Result<()> {
+fn set_file_perms(file: &std_fs::File, mode: u32, _preserve: bool, _mask: u32) -> io::Result<()> {
     if mode & 0o200 == 0o200 {
         return Ok(());
     }
@@ -1152,9 +1137,8 @@ fn set_file_perms(file: &std::fs::File, mode: u32, _preserve: bool, _mask: u32) 
 }
 
 #[cfg(target_arch = "wasm32")]
-#[allow(unused_variables)]
-fn set_file_perms(file: &std::fs::File, mode: u32, preserve: bool, mask: u32) -> io::Result<()> {
-    Err(io::Error::new(io::ErrorKind::Other, "Not implemented"))
+fn set_file_perms(_file: &std_fs::File, _mode: u32, _preserve: bool, _mask: u32) -> io::Result<()> {
+    Err(io::Error::other("Not implemented"))
 }
 
 #[cfg(feature = "runtime-smol")]
@@ -1201,7 +1185,7 @@ impl<R: Read + Unpin> Read for EntryFields<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        into: &mut tokio::io::ReadBuf,
+        into: &mut io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         loop {
             if self.read_state.is_none() {
@@ -1246,8 +1230,8 @@ impl<R: Read + Unpin> Read for EntryIo<R> {
         into: &mut [u8],
     ) -> Poll<io::Result<usize>> {
         match &mut *self {
-            EntryIo::Pad(io) => Pin::new(io).poll_read(cx, into),
-            EntryIo::Data(io) => {
+            Self::Pad(io) => Pin::new(io).poll_read(cx, into),
+            Self::Data(io) => {
                 let n = ready!(Pin::new(&mut *io).poll_read(cx, into))?;
                 if n == 0 && !into.is_empty() && io.limit() > 0 {
                     return Poll::Ready(Err(truncation_error()));
@@ -1263,11 +1247,11 @@ impl<R: Read + Unpin> Read for EntryIo<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        into: &mut tokio::io::ReadBuf,
+        into: &mut io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         match &mut *self {
-            EntryIo::Pad(io) => Pin::new(io).poll_read(cx, into),
-            EntryIo::Data(io) => {
+            Self::Pad(io) => Pin::new(io).poll_read(cx, into),
+            Self::Data(io) => {
                 let filled = into.filled().len();
                 ready!(Pin::new(&mut *io).poll_read(cx, into))?;
                 if into.filled().len() == filled && into.remaining() > 0 && io.limit() > 0 {
@@ -1280,15 +1264,10 @@ impl<R: Read + Unpin> Read for EntryIo<R> {
 }
 
 /// Creates `dst` for writing, replacing a file or link already there.
-fn create_new_replacing(dst: &Path) -> io::Result<std::fs::File> {
-    let open = || {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(dst)
-    };
+fn create_or_replace(dst: &Path) -> io::Result<std_fs::File> {
+    let open = || OpenOptions::new().write(true).create_new(true).open(dst);
     match open() {
-        Err(err) if err.kind() == ErrorKind::AlreadyExists => match std::fs::remove_file(dst) {
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => match std_fs::remove_file(dst) {
             Ok(()) => open(),
             Err(e) if e.kind() == ErrorKind::NotFound => open(),
             Err(e) => Err(e),
@@ -1315,6 +1294,10 @@ fn is_windows_reserved(_: &OsStr) -> bool {
 
 /// Returns whether Windows opens `name` as a device, such as `NUL` or `COM1`.
 #[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "calls ntdll's RtlIsDosDeviceName_U with a NUL-terminated UTF-16 string"
+)]
 fn is_device_name(name: &OsStr) -> bool {
     use std::os::windows::ffi::OsStrExt;
 
@@ -1362,6 +1345,7 @@ fn is_device_base_name(name: &str) -> bool {
     }
 }
 
+/// A buffer being read into, truncated to the bytes read when dropped.
 struct Guard<'a> {
     buf: &'a mut Vec<u8>,
     len: usize,
@@ -1369,9 +1353,7 @@ struct Guard<'a> {
 
 impl Drop for Guard<'_> {
     fn drop(&mut self) {
-        unsafe {
-            self.buf.set_len(self.len);
-        }
+        self.buf.truncate(self.len);
     }
 }
 
@@ -1385,33 +1367,21 @@ fn poll_read_all_internal<R: Read + ?Sized>(
         len: buf.len(),
         buf,
     };
-    let ret;
     loop {
         if g.len == g.buf.len() {
-            unsafe {
-                g.buf.reserve(32);
-                let capacity = g.buf.capacity();
-                g.buf.set_len(capacity);
-
-                let buf = &mut g.buf[g.len..];
-                std::ptr::write_bytes(buf.as_mut_ptr(), 0, buf.len());
-            }
+            g.buf.reserve(32);
+            let capacity = g.buf.capacity();
+            g.buf.resize(capacity, 0);
         }
-
-        match ready!(rd.as_mut().poll_read(cx, &mut g.buf[g.len..])) {
-            Ok(0) => {
-                ret = Poll::Ready(Ok(g.len));
-                break;
-            }
+        let Some(spare) = g.buf.get_mut(g.len..) else {
+            return Poll::Ready(Err(other("a read returned more bytes than it was given")));
+        };
+        match ready!(rd.as_mut().poll_read(cx, spare)) {
+            Ok(0) => return Poll::Ready(Ok(g.len)),
             Ok(n) => g.len += n,
-            Err(e) => {
-                ret = Poll::Ready(Err(e));
-                break;
-            }
+            Err(e) => return Poll::Ready(Err(e)),
         }
     }
-
-    ret
 }
 
 #[cfg(feature = "runtime-tokio")]
@@ -1424,37 +1394,20 @@ fn poll_read_all_internal<R: Read + ?Sized>(
         len: buf.len(),
         buf,
     };
-    let ret;
     loop {
         if g.len == g.buf.len() {
-            unsafe {
-                g.buf.reserve(32);
-                let capacity = g.buf.capacity();
-                g.buf.set_len(capacity);
-
-                let buf = &mut g.buf[g.len..];
-                std::ptr::write_bytes(buf.as_mut_ptr(), 0, buf.len());
-            }
+            g.buf.reserve(32);
+            let capacity = g.buf.capacity();
+            g.buf.resize(capacity, 0);
         }
-
-        let mut read_buf = io::ReadBuf::new(&mut g.buf[g.len..]);
-        let start = read_buf.filled().len();
+        let Some(spare) = g.buf.get_mut(g.len..) else {
+            return Poll::Ready(Err(other("a read returned more bytes than it was given")));
+        };
+        let mut read_buf = io::ReadBuf::new(spare);
         match ready!(rd.as_mut().poll_read(cx, &mut read_buf)) {
-            Ok(()) => {
-                let diff = read_buf.filled().len() - start;
-                if diff == 0 {
-                    ret = Poll::Ready(Ok(g.len));
-                    break;
-                } else {
-                    g.len += diff;
-                }
-            }
-            Err(e) => {
-                ret = Poll::Ready(Err(e));
-                break;
-            }
+            Ok(()) if read_buf.filled().is_empty() => return Poll::Ready(Ok(g.len)),
+            Ok(()) => g.len += read_buf.filled().len(),
+            Err(e) => return Poll::Ready(Err(e)),
         }
     }
-
-    ret
 }

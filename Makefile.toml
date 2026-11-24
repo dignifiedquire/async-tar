@@ -84,6 +84,13 @@ toolchain = { channel = "stable", min_version = "1.97.0" }
 command = "cargo"
 args = ["clippy", "--all-targets", "--no-default-features", "--features", "runtime-tokio"]
 
+# tokio's fs feature is unavailable on wasm32, so only smol is checked there.
+[tasks.clippy-wasm]
+description = "Run cargo-clippy on the library for wasm32 with the smol runtime"
+toolchain = { channel = "stable", min_version = "1.97.0" }
+command = "cargo"
+args = ["clippy", "--lib", "--target", "wasm32-unknown-unknown"]
+
 [tasks.doc]
 description = "Check the documentation build"
 # Allows us to use CARGO_BUILD_WARNINGS instead of

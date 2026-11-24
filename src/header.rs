@@ -22,7 +22,6 @@ use crate::{EntryType, other};
 
 /// Representation of the header of an entry in an archive
 #[repr(C)]
-#[allow(missing_docs)]
 pub struct Header {
     bytes: [u8; 512],
 }
@@ -43,7 +42,10 @@ pub enum HeaderMode {
 
 /// Representation of the header of an entry in an archive
 #[repr(C)]
-#[allow(missing_docs)]
+#[expect(
+    missing_docs,
+    reason = "the fields are the header fields of the tar format"
+)]
 pub struct OldHeader {
     pub name: [u8; 100],
     pub mode: [u8; 8],
@@ -59,7 +61,10 @@ pub struct OldHeader {
 
 /// Representation of the header of an entry in an archive
 #[repr(C)]
-#[allow(missing_docs)]
+#[expect(
+    missing_docs,
+    reason = "the fields are the header fields of the tar format"
+)]
 pub struct UstarHeader {
     pub name: [u8; 100],
     pub mode: [u8; 8],
@@ -84,7 +89,10 @@ pub struct UstarHeader {
 
 /// Representation of the header of an entry in an archive
 #[repr(C)]
-#[allow(missing_docs)]
+#[expect(
+    missing_docs,
+    reason = "the fields are the header fields of the tar format"
+)]
 pub struct GnuHeader {
     pub name: [u8; 100],
     pub mode: [u8; 8],
@@ -118,7 +126,10 @@ pub struct GnuHeader {
 ///
 /// Specifies the offset/number of bytes of a chunk of data in octal.
 #[repr(C)]
-#[allow(missing_docs)]
+#[expect(
+    missing_docs,
+    reason = "the fields are the header fields of the tar format"
+)]
 pub struct GnuSparseHeader {
     pub offset: [u8; 12],
     pub numbytes: [u8; 12],
@@ -129,7 +140,10 @@ pub struct GnuSparseHeader {
 /// When a `GnuHeader` has the `isextended` flag set to `1` then the contents of
 /// the next entry will be one of these headers.
 #[repr(C)]
-#[allow(missing_docs)]
+#[expect(
+    missing_docs,
+    reason = "the fields are the header fields of the tar format"
+)]
 #[derive(Debug)]
 pub struct GnuExtSparseHeader {
     pub sparse: [GnuSparseHeader; 21],
@@ -143,8 +157,12 @@ impl Header {
     /// The GNU style header is the default for this library and allows various
     /// extensions such as long path names, long link names, and setting the
     /// atime/ctime metadata attributes of files.
-    pub fn new_gnu() -> Header {
-        let mut header = Header { bytes: [0; 512] };
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
+    pub fn new_gnu() -> Self {
+        let mut header = Self { bytes: [0; 512] };
         unsafe {
             let gnu = cast_mut::<_, GnuHeader>(&mut header);
             gnu.magic = *b"ustar ";
@@ -161,8 +179,12 @@ impl Header {
     /// too long) path name.
     ///
     /// UStar is also the basis used for pax archives.
-    pub fn new_ustar() -> Header {
-        let mut header = Header { bytes: [0; 512] };
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
+    pub fn new_ustar() -> Self {
+        let mut header = Self { bytes: [0; 512] };
         unsafe {
             let gnu = cast_mut::<_, UstarHeader>(&mut header);
             gnu.magic = *b"ustar\0";
@@ -178,12 +200,16 @@ impl Header {
     /// versions are compatible with (e.g. they are a superset). This header
     /// format limits the path name limit and isn't able to contain extra
     /// metadata like atime/ctime.
-    pub fn new_old() -> Header {
-        let mut header = Header { bytes: [0; 512] };
+    pub fn new_old() -> Self {
+        let mut header = Self { bytes: [0; 512] };
         header.set_mtime(0);
         header
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     fn is_ustar(&self) -> bool {
         let ustar = unsafe { cast::<_, UstarHeader>(self) };
         // Apache Ant writes NULs for the version, and GNU tar, bsdtar, Python
@@ -192,11 +218,19 @@ impl Header {
             && (ustar.version[..] == b"00"[..] || ustar.version[..] == b"\0\0"[..])
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     fn is_gnu(&self) -> bool {
         let ustar = unsafe { cast::<_, UstarHeader>(self) };
         ustar.magic[..] == b"ustar "[..] && ustar.version[..] == b" \0"[..]
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub(crate) fn has_unknown_version(&self) -> bool {
         let ustar = unsafe { cast::<_, UstarHeader>(self) };
         let has_magic = ustar.magic[..] == b"ustar\0"[..] || ustar.magic[..] == b"ustar "[..];
@@ -207,11 +241,19 @@ impl Header {
     ///
     /// This view will always succeed as all archive header formats will fill
     /// out at least the fields specified in the old header format.
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_old(&self) -> &OldHeader {
         unsafe { cast(self) }
     }
 
     /// Same as `as_old`, but the mutable version.
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_old_mut(&mut self) -> &mut OldHeader {
         unsafe { cast_mut(self) }
     }
@@ -225,6 +267,10 @@ impl Header {
     /// This cast may not succeed as this function will test whether the
     /// magic/version fields of the UStar format have the appropriate values,
     /// returning `None` if they aren't correct.
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_ustar(&self) -> Option<&UstarHeader> {
         if self.is_ustar() {
             Some(unsafe { cast(self) })
@@ -234,6 +280,10 @@ impl Header {
     }
 
     /// Same as `as_ustar_mut`, but the mutable version.
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_ustar_mut(&mut self) -> Option<&mut UstarHeader> {
         if self.is_ustar() {
             Some(unsafe { cast_mut(self) })
@@ -251,6 +301,10 @@ impl Header {
     /// This cast may not succeed as this function will test whether the
     /// magic/version fields of the GNU format have the appropriate values,
     /// returning `None` if they aren't correct.
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_gnu(&self) -> Option<&GnuHeader> {
         if self.is_gnu() {
             Some(unsafe { cast(self) })
@@ -260,6 +314,10 @@ impl Header {
     }
 
     /// Same as `as_gnu`, but the mutable version.
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_gnu_mut(&mut self) -> Option<&mut GnuHeader> {
         if self.is_gnu() {
             Some(unsafe { cast_mut(self) })
@@ -271,10 +329,14 @@ impl Header {
     /// Treats the given byte slice as a header.
     ///
     /// Panics if the length of the passed slice is not equal to 512.
-    pub fn from_byte_slice(bytes: &[u8]) -> &Header {
-        assert_eq!(bytes.len(), mem::size_of::<Header>());
-        assert_eq!(mem::align_of_val(bytes), mem::align_of::<Header>());
-        unsafe { &*(bytes.as_ptr() as *const Header) }
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
+    pub fn from_byte_slice(bytes: &[u8]) -> &Self {
+        assert_eq!(bytes.len(), mem::size_of::<Self>());
+        assert_eq!(mem::align_of_val(bytes), mem::align_of::<Self>());
+        unsafe { &*(bytes.as_ptr() as *const Self) }
     }
 
     /// Returns a view into this header as a byte array.
@@ -706,15 +768,12 @@ impl Header {
     }
 
     fn calculate_cksum(&self) -> u32 {
-        let old = self.as_old();
-        let start = old as *const _ as usize;
-        let cksum_start = old.cksum.as_ptr() as *const _ as usize;
-        let offset = cksum_start - start;
-        let len = old.cksum.len();
-        self.bytes[0..offset]
+        const START: usize = mem::offset_of!(OldHeader, cksum);
+        const END: usize = mem::offset_of!(OldHeader, linkflag);
+        self.bytes[..START]
             .iter()
-            .chain(iter::repeat_n(&b' ', len))
-            .chain(&self.bytes[offset + len..])
+            .chain(iter::repeat_n(&b' ', END - START))
+            .chain(&self.bytes[END..])
             .fold(0, |a, b| a + (*b as u32))
     }
 
@@ -737,8 +796,11 @@ impl Header {
     }
 
     #[cfg(target_arch = "wasm32")]
-    #[allow(unused_variables)]
-    fn fill_platform_from(&mut self, meta: &Metadata, mode: HeaderMode) {
+    #[expect(
+        clippy::unimplemented,
+        reason = "wasm32 has no file metadata to fill a header from"
+    )]
+    fn fill_platform_from(&mut self, _meta: &Metadata, _mode: HeaderMode) {
         unimplemented!();
     }
 
@@ -849,7 +911,7 @@ impl Header {
         });
     }
 
-    fn debug_fields(&self, b: &mut fmt::DebugStruct) {
+    fn debug_fields(&self, b: &mut fmt::DebugStruct<'_, '_>) {
         if let Ok(entry_size) = self.entry_size() {
             b.field("entry_size", &entry_size);
         }
@@ -896,17 +958,25 @@ impl Header {
 struct DebugAsOctal<T>(T);
 
 impl<T: fmt::Octal> fmt::Debug for DebugAsOctal<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Octal::fmt(&self.0, f)
     }
 }
 
+#[expect(
+    unsafe_code,
+    reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+)]
 unsafe fn cast<T, U>(a: &T) -> &U {
     assert_eq!(mem::size_of_val(a), mem::size_of::<U>());
     assert_eq!(mem::align_of_val(a), mem::align_of::<U>());
     unsafe { &*(a as *const T as *const U) }
 }
 
+#[expect(
+    unsafe_code,
+    reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+)]
 unsafe fn cast_mut<T, U>(a: &mut T) -> &mut U {
     assert_eq!(mem::size_of_val(a), mem::size_of::<U>());
     assert_eq!(mem::align_of_val(a), mem::align_of::<U>());
@@ -914,13 +984,13 @@ unsafe fn cast_mut<T, U>(a: &mut T) -> &mut U {
 }
 
 impl Clone for Header {
-    fn clone(&self) -> Header {
-        Header { bytes: self.bytes }
+    fn clone(&self) -> Self {
+        Self { bytes: self.bytes }
     }
 }
 
 impl fmt::Debug for Header {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(me) = self.as_ustar() {
             me.fmt(f)
         } else if let Some(me) = self.as_gnu() {
@@ -933,18 +1003,26 @@ impl fmt::Debug for Header {
 
 impl OldHeader {
     /// Views this as a normal `Header`
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_header(&self) -> &Header {
         unsafe { cast(self) }
     }
 
     /// Views this as a normal `Header`
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_header_mut(&mut self) -> &mut Header {
         unsafe { cast_mut(self) }
     }
 }
 
 impl fmt::Debug for OldHeader {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_struct("OldHeader");
         self.as_header().debug_fields(&mut f);
         f.finish()
@@ -1020,7 +1098,13 @@ impl UstarHeader {
                     format!("{} when setting path for {}", err, self.path_lossy()),
                 )
             })?;
-            let path = bytes2path(Cow::Borrowed(&bytes[prefixlen + 1..]))?;
+            let Some(name) = bytes.get(prefixlen + 1..) else {
+                return Err(other(&format!(
+                    "path cannot be split to be inserted into archive: {}",
+                    path.display()
+                )));
+            };
+            let path = bytes2path(Cow::Borrowed(name))?;
             copy_path_into(&mut self.name, &path, false).map_err(|err| {
                 io::Error::new(
                     err.kind(),
@@ -1104,18 +1188,26 @@ impl UstarHeader {
     }
 
     /// Views this as a normal `Header`
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_header(&self) -> &Header {
         unsafe { cast(self) }
     }
 
     /// Views this as a normal `Header`
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_header_mut(&mut self) -> &mut Header {
         unsafe { cast_mut(self) }
     }
 }
 
 impl fmt::Debug for UstarHeader {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_struct("UstarHeader");
         self.as_header().debug_fields(&mut f);
         f.finish()
@@ -1275,18 +1367,26 @@ impl GnuHeader {
     }
 
     /// Views this as a normal `Header`
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_header(&self) -> &Header {
         unsafe { cast(self) }
     }
 
     /// Views this as a normal `Header`
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_header_mut(&mut self) -> &mut Header {
         unsafe { cast_mut(self) }
     }
 }
 
 impl fmt::Debug for GnuHeader {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_struct("GnuHeader");
         self.as_header().debug_fields(&mut f);
         if let Ok(atime) = self.atime() {
@@ -1304,7 +1404,7 @@ impl fmt::Debug for GnuHeader {
 struct DebugSparseHeaders<'a>(&'a [GnuSparseHeader]);
 
 impl<'a> fmt::Debug for DebugSparseHeaders<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_list();
         for header in self.0 {
             if !header.is_empty() {
@@ -1347,7 +1447,7 @@ impl GnuSparseHeader {
 }
 
 impl fmt::Debug for GnuSparseHeader {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_struct("GnuSparseHeader");
         if let Ok(offset) = self.offset() {
             f.field("offset", &offset);
@@ -1361,20 +1461,32 @@ impl fmt::Debug for GnuSparseHeader {
 
 impl GnuExtSparseHeader {
     /// Crates a new zero'd out sparse header entry.
-    pub fn new() -> GnuExtSparseHeader {
+    #[expect(
+        unsafe_code,
+        reason = "the header is byte arrays, for which all zeros is valid"
+    )]
+    pub fn new() -> Self {
         unsafe { mem::zeroed() }
     }
 
     /// Returns a view into this header as a byte array.
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_bytes(&self) -> &[u8; 512] {
         debug_assert_eq!(mem::size_of_val(self), 512);
-        unsafe { &*(self as *const GnuExtSparseHeader as *const [u8; 512]) }
+        unsafe { &*(self as *const Self as *const [u8; 512]) }
     }
 
     /// Returns a view into this header as a byte array.
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_mut_bytes(&mut self) -> &mut [u8; 512] {
         debug_assert_eq!(mem::size_of_val(self), 512);
-        unsafe { &mut *(self as *mut GnuExtSparseHeader as *mut [u8; 512]) }
+        unsafe { &mut *(self as *mut Self as *mut [u8; 512]) }
     }
 
     /// Returns a slice of the underlying sparse headers.
@@ -1399,14 +1511,11 @@ impl Default for GnuExtSparseHeader {
 
 fn octal_from(slice: &[u8]) -> io::Result<u64> {
     let trun = truncate(slice);
-    let num = match str::from_utf8(trun) {
-        Ok(n) => n,
-        Err(_) => {
-            return Err(other(&format!(
-                "numeric field did not have utf-8 text: {}",
-                String::from_utf8_lossy(trun)
-            )));
-        }
+    let Ok(num) = str::from_utf8(trun) else {
+        return Err(other(&format!(
+            "numeric field did not have utf-8 text: {}",
+            String::from_utf8_lossy(trun)
+        )));
     };
     match u64::from_str_radix(num.trim(), 8) {
         Ok(n) => Ok(n),
@@ -1441,7 +1550,7 @@ fn size_from(field: &[u8]) -> io::Result<u64> {
     if field.iter().all(|b| *b == 0) {
         return Ok(0);
     }
-    let is_octal = field[0] & 0x80 == 0;
+    let is_octal = field.first().is_some_and(|b| b & 0x80 == 0);
     if is_octal && (field.contains(&b'+') || !matches!(field.last(), Some(0 | b' '))) {
         return Err(other("size field has a sign or no terminator"));
     }
@@ -1451,10 +1560,9 @@ fn size_from(field: &[u8]) -> io::Result<u64> {
 // Wrapper to figure out if we should read the header field in binary (numeric
 // extension) or octal (standard encoding).
 fn num_field_wrapper_from(src: &[u8]) -> io::Result<u64> {
-    if src[0] & 0x80 == 0 {
-        octal_from(src)
-    } else {
-        numeric_extended_from(src)
+    match src.first() {
+        Some(b) if b & 0x80 != 0 => numeric_extended_from(src),
+        _ => octal_from(src),
     }
 }
 
@@ -1470,34 +1578,30 @@ fn numeric_extended_into(dst: &mut [u8], src: u64) {
     ) {
         *slot = val;
     }
-    dst[0] |= 0x80;
+    if let Some(first) = dst.first_mut() {
+        *first |= 0x80;
+    }
 }
 
 fn numeric_extended_from(src: &[u8]) -> io::Result<u64> {
-    let mut dst: u64 = 0;
-    let mut b_to_skip = 1;
-    if src.len() == 8 {
-        // read first byte without extension flag bit
-        dst = (src[0] ^ 0x80) as u64;
-    } else {
-        // only read last 8 bytes
-        b_to_skip = src.len() - 8;
-        if src[0] != 0x80 || src[1..b_to_skip].iter().any(|b| *b != 0) {
-            return Err(other("base-256 number does not fit in 64 bits"));
-        }
+    let Some((flag, rest)) = src.split_first() else {
+        return Err(other("base-256 number is empty"));
+    };
+    // An 8-byte field keeps the top bits after its flag bit. A longer one keeps the
+    // number in its last 8 bytes, after a bare flag byte and zeros.
+    let padding = rest.len().saturating_sub(8);
+    if src.len() != 8 && (*flag != 0x80 || rest.iter().take(padding).any(|b| *b != 0)) {
+        return Err(other("base-256 number does not fit in 64 bits"));
     }
-    for byte in src.iter().skip(b_to_skip) {
-        dst <<= 8;
-        dst |= *byte as u64;
-    }
-    Ok(dst)
+    let number = rest
+        .iter()
+        .skip(padding)
+        .fold(u64::from(flag ^ 0x80), |n, b| (n << 8) | u64::from(*b));
+    Ok(number)
 }
 
 fn truncate(slice: &[u8]) -> &[u8] {
-    match slice.iter().position(|i| *i == 0) {
-        Some(i) => &slice[..i],
-        None => slice,
-    }
+    slice.split(|b| *b == 0).next().unwrap_or(slice)
 }
 
 /// Copies `bytes` into the `slot` provided, returning an error if the `bytes`
@@ -1568,8 +1672,11 @@ fn copy_path_into_inner(
 
     fn copy(slot: &mut &mut [u8], bytes: &[u8]) -> io::Result<()> {
         copy_into(slot, bytes)?;
-        let tmp = std::mem::take(slot);
-        *slot = &mut tmp[bytes.len()..];
+        let tmp = mem::take(slot);
+        let Some((_, rest)) = tmp.split_at_mut_checked(bytes.len()) else {
+            return Err(other("provided value is too long"));
+        };
+        *slot = rest;
         Ok(())
     }
 }
@@ -1617,7 +1724,7 @@ fn ends_with_slash(p: &Path) -> bool {
 }
 
 #[cfg(any(windows, target_arch = "wasm32"))]
-pub fn path2bytes(p: &Path) -> io::Result<Cow<'_, [u8]>> {
+pub(crate) fn path2bytes(p: &Path) -> io::Result<Cow<'_, [u8]>> {
     p.as_os_str()
         .to_str()
         .map(|s| s.as_bytes())
@@ -1640,14 +1747,14 @@ pub fn path2bytes(p: &Path) -> io::Result<Cow<'_, [u8]>> {
 
 #[cfg(any(unix, target_os = "redox"))]
 /// On unix this will never fail
-pub fn path2bytes(p: &Path) -> io::Result<Cow<'_, [u8]>> {
+pub(crate) fn path2bytes(p: &Path) -> io::Result<Cow<'_, [u8]>> {
     Ok(Cow::Borrowed(p.as_os_str().as_bytes()))
 }
 
 #[cfg(windows)]
 /// On windows we cannot accept non-Unicode bytes because it
 /// is impossible to convert it to UTF-16.
-pub fn bytes2path(bytes: Cow<[u8]>) -> io::Result<Cow<Path>> {
+pub(crate) fn bytes2path(bytes: Cow<'_, [u8]>) -> io::Result<Cow<'_, Path>> {
     return match bytes {
         Cow::Borrowed(bytes) => {
             let s = str::from_utf8(bytes).map_err(|_| not_unicode(bytes))?;
@@ -1669,7 +1776,7 @@ pub fn bytes2path(bytes: Cow<[u8]>) -> io::Result<Cow<Path>> {
 
 #[cfg(any(unix, target_os = "redox"))]
 /// On unix this operation can never fail.
-pub fn bytes2path(bytes: Cow<'_, [u8]>) -> io::Result<Cow<'_, Path>> {
+pub(crate) fn bytes2path(bytes: Cow<'_, [u8]>) -> io::Result<Cow<'_, Path>> {
     use std::ffi::{OsStr, OsString};
 
     Ok(match bytes {
@@ -1679,7 +1786,7 @@ pub fn bytes2path(bytes: Cow<'_, [u8]>) -> io::Result<Cow<'_, Path>> {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn bytes2path(bytes: Cow<[u8]>) -> io::Result<Cow<Path>> {
+pub(crate) fn bytes2path(bytes: Cow<'_, [u8]>) -> io::Result<Cow<'_, Path>> {
     Ok(match bytes {
         Cow::Borrowed(bytes) => {
             Cow::Borrowed({ Path::new(str::from_utf8(bytes).map_err(invalid_utf8)?) })

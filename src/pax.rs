@@ -23,7 +23,7 @@ pub struct PaxExtension<'entry> {
     value: &'entry [u8],
 }
 
-pub fn pax_extensions(a: &[u8]) -> PaxExtensions<'_> {
+pub(crate) fn pax_extensions(a: &[u8]) -> PaxExtensions<'_> {
     PaxExtensions { data: a }
 }
 
@@ -31,49 +31,39 @@ impl<'entry> Iterator for PaxExtensions<'entry> {
     type Item = io::Result<PaxExtension<'entry>>;
 
     fn next(&mut self) -> Option<io::Result<PaxExtension<'entry>>> {
-        if self.data.is_empty() {
-            return None;
-        }
+        let first = *self.data.first()?;
 
         // A NUL ends the records, and only NUL padding may follow it.
-        if self.data[0] == 0 {
+        if first == 0 {
             let is_padding = self.data.iter().all(|b| *b == 0);
             self.data = &[];
             return (!is_padding).then(|| Err(other("malformed pax extension: data after NUL")));
         }
 
-        let space_idx = match self.data.iter().position(|b| *b == b' ') {
-            Some(idx) => idx,
-            None => {
-                self.data = &[];
-                return Some(Err(other("malformed pax extension: no space after length")));
-            }
+        let Some((len_field, _)) = split_once(self.data, b' ') else {
+            self.data = &[];
+            return Some(Err(other("malformed pax extension: no space after length")));
         };
 
-        let len_str = match str::from_utf8(&self.data[..space_idx]) {
-            Ok(s) => s,
-            Err(_) => {
-                self.data = &[];
-                return Some(Err(other("malformed pax extension: non-utf8 length")));
-            }
+        let Ok(len_str) = str::from_utf8(len_field) else {
+            self.data = &[];
+            return Some(Err(other("malformed pax extension: non-utf8 length")));
         };
 
         let is_decimal = !len_str.is_empty() && len_str.bytes().all(|b| b.is_ascii_digit());
         let total_len = match len_str.parse::<usize>() {
-            Ok(len) if is_decimal && len > space_idx => len,
+            Ok(len) if is_decimal && len > len_field.len() => len,
             _ => {
                 self.data = &[];
                 return Some(Err(other("malformed pax extension: invalid length")));
             }
         };
 
-        if self.data.len() < total_len {
+        let Some((record, rest)) = self.data.split_at_checked(total_len) else {
             self.data = &[];
             return Some(Err(other("malformed pax extension: record truncated")));
-        }
-
-        let record = &self.data[..total_len];
-        self.data = &self.data[total_len..];
+        };
+        self.data = rest;
 
         let Some(record_content) = record.strip_suffix(b"\n") else {
             self.data = &[];
@@ -82,19 +72,21 @@ impl<'entry> Iterator for PaxExtensions<'entry> {
             )));
         };
 
-        let kv = &record_content[space_idx + 1..];
-        let equals_idx = match kv.iter().position(|b| *b == b'=') {
-            Some(idx) => idx,
-            None => {
-                return Some(Err(other("malformed pax extension: no '=' in record")));
-            }
+        // The record starts with the length field, so its first space ends that field.
+        let Some((key, value)) =
+            split_once(record_content, b' ').and_then(|(_, kv)| split_once(kv, b'='))
+        else {
+            return Some(Err(other("malformed pax extension: no '=' in record")));
         };
 
-        Some(Ok(PaxExtension {
-            key: &kv[..equals_idx],
-            value: &kv[equals_idx + 1..],
-        }))
+        Some(Ok(PaxExtension { key, value }))
     }
+}
+
+/// Splits `bytes` around the first `delimiter`, or returns `None` without one.
+fn split_once(bytes: &[u8], delimiter: u8) -> Option<(&[u8], &[u8])> {
+    let index = bytes.iter().position(|b| *b == delimiter)?;
+    Some((bytes.get(..index)?, bytes.get(index + 1..)?))
 }
 
 impl<'entry> PaxExtension<'entry> {
