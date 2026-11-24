@@ -4,7 +4,7 @@ use std::{
     cmp,
     collections::VecDeque,
     iter, mem,
-    path::Path,
+    path::{Path, PathBuf},
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll},
@@ -28,12 +28,18 @@ use tokio_stream::{Stream, StreamExt};
 
 use crate::{
     Entry, EntryType, GnuExtSparseHeader, GnuSparseHeader, Header,
-    entry::{EntryFields, EntryIo},
+    entry::{EntryFields, EntryIo, SmallFile},
     error::TarError,
     fs_canonicalize, other,
     pax::pax_extensions,
     symlink_metadata,
 };
+
+/// The most small files `Archive::unpack` writes in one blocking call.
+const MAX_BATCH_FILES: usize = 256;
+
+/// The most data `Archive::unpack` holds before writing its small files.
+const MAX_BATCH_BYTES: usize = 1024 * 1024;
 
 /// A top-level representation of an archive file.
 ///
@@ -324,19 +330,82 @@ impl<R: Read + Unpin> Archive<R> {
         // descendants), to ensure that directory permissions do not interfer with descendant
         // extraction.
         let mut directories = Vec::new();
-        while let Some(entry) = pinned.next().await {
-            let mut file = entry.map_err(|e| TarError::new("failed to iterate over archive", e))?;
-            if file.header().entry_type() == crate::EntryType::Directory {
-                directories.push(file);
-            } else {
+        // Small files are written in batches, in archive order. Any other entry waits
+        // for the batch, so it sees every file before it.
+        let mut batch = canon_dst.clone().map(SmallFiles::new);
+        let result = async {
+            while let Some(entry) = pinned.next().await {
+                let mut file =
+                    entry.map_err(|e| TarError::new("failed to iterate over archive", e))?;
+                if file.header().entry_type() == crate::EntryType::Directory {
+                    directories.push(file);
+                    continue;
+                }
+                if let Some(batch) = batch.as_mut() {
+                    if let Some(small) = file.read_small_file_in(dst).await? {
+                        batch.push(small).await?;
+                        continue;
+                    }
+                    batch.flush().await?;
+                }
                 file.unpack_in_canonical(dst, canon_dst.as_deref()).await?;
             }
+            Ok::<(), io::Error>(())
         }
+        .await;
+        // The files before a failing entry are still written.
+        if let Some(batch) = batch.as_mut() {
+            batch.flush().await?;
+        }
+        result?;
         for mut dir in directories {
             dir.unpack_in_canonical(dst, canon_dst.as_deref()).await?;
         }
 
         Ok(())
+    }
+}
+
+/// Small files waiting to be written under a canonical destination.
+struct SmallFiles {
+    canon_dst: PathBuf,
+    files: Vec<SmallFile>,
+    size: usize,
+}
+
+impl SmallFiles {
+    fn new(canon_dst: PathBuf) -> Self {
+        SmallFiles {
+            canon_dst,
+            files: Vec::new(),
+            size: 0,
+        }
+    }
+
+    /// Adds `file`, writing the batch once it is full.
+    async fn push(&mut self, file: SmallFile) -> io::Result<()> {
+        self.size += file.len();
+        self.files.push(file);
+        if self.files.len() >= MAX_BATCH_FILES || self.size >= MAX_BATCH_BYTES {
+            self.flush().await?;
+        }
+        Ok(())
+    }
+
+    /// Writes every waiting file in one blocking call, stopping at the first error.
+    async fn flush(&mut self) -> io::Result<()> {
+        if self.files.is_empty() {
+            return Ok(());
+        }
+        let files = mem::take(&mut self.files);
+        self.size = 0;
+        let canon_dst = self.canon_dst.clone();
+        crate::unblock(move || {
+            files
+                .iter()
+                .try_for_each(|file| file.unpack_in(&canon_dst).map(drop))
+        })
+        .await
     }
 }
 

@@ -300,6 +300,11 @@ impl<R: Read + Unpin> Entry<R> {
         self.fields.unpack_in(dst, canon_dst).await
     }
 
+    /// Reads the small regular file this entry unpacks to under `dst`.
+    pub(crate) async fn read_small_file_in(&mut self, dst: &Path) -> io::Result<Option<SmallFile>> {
+        self.fields.read_small_file_in(dst).await
+    }
+
     /// Indicate whether extended file attributes (xattrs on Unix) are preserved
     /// when unpacking this entry.
     ///
@@ -512,6 +517,25 @@ impl<R: Read + Unpin> EntryFields<R> {
             .map_err(|e| TarError::new(&format!("failed to unpack `{}`", file_dst.display()), e))?;
 
         Ok(true)
+    }
+
+    /// Reads the small regular file this entry unpacks to under `dst`.
+    ///
+    /// Returns `None`, reading nothing, for any other entry, or for a skipped or
+    /// metadata entry.
+    pub(crate) async fn read_small_file_in(&mut self, dst: &Path) -> io::Result<Option<SmallFile>> {
+        if self.unpack_xattrs || self.header.entry_type().is_metadata() {
+            return Ok(None);
+        }
+        let Some(file_dst) = self.join_path(dst)? else {
+            return Ok(None);
+        };
+        if *dst == *file_dst || file_dst.parent().is_none() {
+            return Ok(None);
+        }
+        self.read_small_file(&file_dst).await.map_err(|e| {
+            TarError::new(&format!("failed to unpack `{}`", file_dst.display()), e).into()
+        })
     }
 
     /// Joins this entry's path to `dst`, returning `None` for a path with a `..` component.
@@ -994,6 +1018,11 @@ pub(crate) struct SmallFile {
 }
 
 impl SmallFile {
+    /// Returns the size of the file's data.
+    pub(crate) fn len(&self) -> usize {
+        self.data.len()
+    }
+
     /// Creates the file's missing parent directories inside `canon_dst`, then writes it.
     pub(crate) fn unpack_in(&self, canon_dst: &Path) -> io::Result<std::fs::File> {
         if let Some(parent) = self.dst.parent() {

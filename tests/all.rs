@@ -2408,6 +2408,22 @@ async fn unpacked_files_are_complete_when_unpack_returns() {
 
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
 #[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn unpack_writes_the_files_before_a_corrupt_header() {
+    let mut tar = Vec::new();
+    push_file(&mut tar, "first.txt", b"first\n");
+    push_file(&mut tar, "second.txt", b"second\n");
+    push_block(&mut tar, &[1; BLOCK]);
+    tar.extend(repeat_n(0u8, BLOCK * 2));
+
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
+    assert!(Archive::new(&tar[..]).unpack(td.path()).await.is_err());
+
+    assert_eq!(t!(std::fs::read(td.path().join("first.txt"))), b"first\n");
+    assert_eq!(t!(std::fs::read(td.path().join("second.txt"))), b"second\n");
+}
+
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
 async fn append_dir_all_archives_every_entry_of_a_large_directory() {
     let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
     let count = 2 * 4096 + 1;
