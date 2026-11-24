@@ -14,7 +14,8 @@ async fn inner_main() -> io::Result<()> {
 
     a.append_path("README.md").await?;
     a.append_file("lib.rs", &mut File::open("src/lib.rs").await?)
-        .await
+        .await?;
+    a.finish().await
 }
 
 #[cfg(feature = "runtime-smol")]
