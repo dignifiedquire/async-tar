@@ -357,7 +357,7 @@ impl<R: Read + Unpin> Read for Entry<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        into: &mut tokio::io::ReadBuf,
+        into: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         Pin::new(&mut self.fields).poll_read(cx, into)
     }
@@ -1209,7 +1209,7 @@ impl<R: Read + Unpin> Read for EntryFields<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        into: &mut tokio::io::ReadBuf,
+        into: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         loop {
             if self.read_state.is_none() {
@@ -1271,7 +1271,7 @@ impl<R: Read + Unpin> Read for EntryIo<R> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        into: &mut tokio::io::ReadBuf,
+        into: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         match &mut *self {
             EntryIo::Pad(io) => Pin::new(io).poll_read(cx, into),

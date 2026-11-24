@@ -1156,7 +1156,7 @@ impl<R: Read + Unpin> Read for Archive<R> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        into: &mut tokio::io::ReadBuf,
+        into: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         let mut lock = self.inner.lock().unwrap();
         let mut inner = Pin::new(&mut *lock);

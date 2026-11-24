@@ -31,7 +31,7 @@ impl error::Error for TarError {
 }
 
 impl fmt::Display for TarError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.desc.fmt(f)
     }
 }
