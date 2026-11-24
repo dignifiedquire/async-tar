@@ -8,7 +8,6 @@ use std::{
     marker,
     path::{Component, Path, PathBuf},
     pin::Pin,
-    ptr,
     task::{Context, Poll},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -1361,28 +1360,19 @@ fn is_device_base_name(name: &str) -> bool {
     }
 }
 
+/// A buffer being read into, truncated to the bytes read when dropped.
 struct Guard<'a> {
     buf: &'a mut Vec<u8>,
     len: usize,
 }
 
 impl Drop for Guard<'_> {
-    #[expect(
-        unsafe_code,
-        reason = "the length restored covers only bytes the read loop zeroed or filled"
-    )]
     fn drop(&mut self) {
-        unsafe {
-            self.buf.set_len(self.len);
-        }
+        self.buf.truncate(self.len);
     }
 }
 
 #[cfg(feature = "runtime-smol")]
-#[expect(
-    unsafe_code,
-    reason = "the buffer grows over zeroed capacity before a read fills it"
-)]
 fn poll_read_all_internal<R: Read + ?Sized>(
     mut rd: Pin<&mut R>,
     cx: &mut Context<'_>,
@@ -1392,40 +1382,24 @@ fn poll_read_all_internal<R: Read + ?Sized>(
         len: buf.len(),
         buf,
     };
-    let ret;
     loop {
         if g.len == g.buf.len() {
-            unsafe {
-                g.buf.reserve(32);
-                let capacity = g.buf.capacity();
-                g.buf.set_len(capacity);
-
-                let buf = &mut g.buf[g.len..];
-                ptr::write_bytes(buf.as_mut_ptr(), 0, buf.len());
-            }
+            g.buf.reserve(32);
+            let capacity = g.buf.capacity();
+            g.buf.resize(capacity, 0);
         }
-
-        match ready!(rd.as_mut().poll_read(cx, &mut g.buf[g.len..])) {
-            Ok(0) => {
-                ret = Poll::Ready(Ok(g.len));
-                break;
-            }
+        let Some(spare) = g.buf.get_mut(g.len..) else {
+            return Poll::Ready(Err(other("a read returned more bytes than it was given")));
+        };
+        match ready!(rd.as_mut().poll_read(cx, spare)) {
+            Ok(0) => return Poll::Ready(Ok(g.len)),
             Ok(n) => g.len += n,
-            Err(e) => {
-                ret = Poll::Ready(Err(e));
-                break;
-            }
+            Err(e) => return Poll::Ready(Err(e)),
         }
     }
-
-    ret
 }
 
 #[cfg(feature = "runtime-tokio")]
-#[expect(
-    unsafe_code,
-    reason = "the buffer grows over zeroed capacity before a read fills it"
-)]
 fn poll_read_all_internal<R: Read + ?Sized>(
     mut rd: Pin<&mut R>,
     cx: &mut Context<'_>,
@@ -1435,37 +1409,20 @@ fn poll_read_all_internal<R: Read + ?Sized>(
         len: buf.len(),
         buf,
     };
-    let ret;
     loop {
         if g.len == g.buf.len() {
-            unsafe {
-                g.buf.reserve(32);
-                let capacity = g.buf.capacity();
-                g.buf.set_len(capacity);
-
-                let buf = &mut g.buf[g.len..];
-                ptr::write_bytes(buf.as_mut_ptr(), 0, buf.len());
-            }
+            g.buf.reserve(32);
+            let capacity = g.buf.capacity();
+            g.buf.resize(capacity, 0);
         }
-
-        let mut read_buf = io::ReadBuf::new(&mut g.buf[g.len..]);
-        let start = read_buf.filled().len();
+        let Some(spare) = g.buf.get_mut(g.len..) else {
+            return Poll::Ready(Err(other("a read returned more bytes than it was given")));
+        };
+        let mut read_buf = io::ReadBuf::new(spare);
         match ready!(rd.as_mut().poll_read(cx, &mut read_buf)) {
-            Ok(()) => {
-                let diff = read_buf.filled().len() - start;
-                if diff == 0 {
-                    ret = Poll::Ready(Ok(g.len));
-                    break;
-                } else {
-                    g.len += diff;
-                }
-            }
-            Err(e) => {
-                ret = Poll::Ready(Err(e));
-                break;
-            }
+            Ok(()) if read_buf.filled().is_empty() => return Poll::Ready(Ok(g.len)),
+            Ok(()) => g.len += read_buf.filled().len(),
+            Err(e) => return Poll::Ready(Err(e)),
         }
     }
-
-    ret
 }
