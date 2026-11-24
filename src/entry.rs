@@ -1307,6 +1307,10 @@ fn is_windows_reserved(_: &OsStr) -> bool {
 
 /// Returns whether Windows opens `name` as a device, such as `NUL` or `COM1`.
 #[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "calls ntdll's RtlIsDosDeviceName_U with a NUL-terminated UTF-16 string"
+)]
 fn is_device_name(name: &OsStr) -> bool {
     use std::os::windows::ffi::OsStrExt;
 
@@ -1360,6 +1364,10 @@ struct Guard<'a> {
 }
 
 impl Drop for Guard<'_> {
+    #[expect(
+        unsafe_code,
+        reason = "the length restored covers only bytes the read loop zeroed or filled"
+    )]
     fn drop(&mut self) {
         unsafe {
             self.buf.set_len(self.len);
@@ -1368,6 +1376,10 @@ impl Drop for Guard<'_> {
 }
 
 #[cfg(feature = "runtime-smol")]
+#[expect(
+    unsafe_code,
+    reason = "the buffer grows over zeroed capacity before a read fills it"
+)]
 fn poll_read_all_internal<R: Read + ?Sized>(
     mut rd: Pin<&mut R>,
     cx: &mut Context<'_>,
@@ -1407,6 +1419,10 @@ fn poll_read_all_internal<R: Read + ?Sized>(
 }
 
 #[cfg(feature = "runtime-tokio")]
+#[expect(
+    unsafe_code,
+    reason = "the buffer grows over zeroed capacity before a read fills it"
+)]
 fn poll_read_all_internal<R: Read + ?Sized>(
     mut rd: Pin<&mut R>,
     cx: &mut Context<'_>,

@@ -157,6 +157,10 @@ impl Header {
     /// The GNU style header is the default for this library and allows various
     /// extensions such as long path names, long link names, and setting the
     /// atime/ctime metadata attributes of files.
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn new_gnu() -> Self {
         let mut header = Self { bytes: [0; 512] };
         unsafe {
@@ -175,6 +179,10 @@ impl Header {
     /// too long) path name.
     ///
     /// UStar is also the basis used for pax archives.
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn new_ustar() -> Self {
         let mut header = Self { bytes: [0; 512] };
         unsafe {
@@ -198,6 +206,10 @@ impl Header {
         header
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     fn is_ustar(&self) -> bool {
         let ustar = unsafe { cast::<_, UstarHeader>(self) };
         // Apache Ant writes NULs for the version, and GNU tar, bsdtar, Python
@@ -206,11 +218,19 @@ impl Header {
             && (ustar.version[..] == b"00"[..] || ustar.version[..] == b"\0\0"[..])
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     fn is_gnu(&self) -> bool {
         let ustar = unsafe { cast::<_, UstarHeader>(self) };
         ustar.magic[..] == b"ustar "[..] && ustar.version[..] == b" \0"[..]
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub(crate) fn has_unknown_version(&self) -> bool {
         let ustar = unsafe { cast::<_, UstarHeader>(self) };
         let has_magic = ustar.magic[..] == b"ustar\0"[..] || ustar.magic[..] == b"ustar "[..];
@@ -221,11 +241,19 @@ impl Header {
     ///
     /// This view will always succeed as all archive header formats will fill
     /// out at least the fields specified in the old header format.
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_old(&self) -> &OldHeader {
         unsafe { cast(self) }
     }
 
     /// Same as `as_old`, but the mutable version.
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_old_mut(&mut self) -> &mut OldHeader {
         unsafe { cast_mut(self) }
     }
@@ -239,6 +267,10 @@ impl Header {
     /// This cast may not succeed as this function will test whether the
     /// magic/version fields of the UStar format have the appropriate values,
     /// returning `None` if they aren't correct.
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_ustar(&self) -> Option<&UstarHeader> {
         if self.is_ustar() {
             Some(unsafe { cast(self) })
@@ -248,6 +280,10 @@ impl Header {
     }
 
     /// Same as `as_ustar_mut`, but the mutable version.
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_ustar_mut(&mut self) -> Option<&mut UstarHeader> {
         if self.is_ustar() {
             Some(unsafe { cast_mut(self) })
@@ -265,6 +301,10 @@ impl Header {
     /// This cast may not succeed as this function will test whether the
     /// magic/version fields of the GNU format have the appropriate values,
     /// returning `None` if they aren't correct.
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_gnu(&self) -> Option<&GnuHeader> {
         if self.is_gnu() {
             Some(unsafe { cast(self) })
@@ -274,6 +314,10 @@ impl Header {
     }
 
     /// Same as `as_gnu`, but the mutable version.
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_gnu_mut(&mut self) -> Option<&mut GnuHeader> {
         if self.is_gnu() {
             Some(unsafe { cast_mut(self) })
@@ -285,6 +329,10 @@ impl Header {
     /// Treats the given byte slice as a header.
     ///
     /// Panics if the length of the passed slice is not equal to 512.
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn from_byte_slice(bytes: &[u8]) -> &Self {
         assert_eq!(bytes.len(), mem::size_of::<Self>());
         assert_eq!(mem::align_of_val(bytes), mem::align_of::<Self>());
@@ -914,12 +962,20 @@ impl<T: fmt::Octal> fmt::Debug for DebugAsOctal<T> {
     }
 }
 
+#[expect(
+    unsafe_code,
+    reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+)]
 unsafe fn cast<T, U>(a: &T) -> &U {
     assert_eq!(mem::size_of_val(a), mem::size_of::<U>());
     assert_eq!(mem::align_of_val(a), mem::align_of::<U>());
     unsafe { &*(a as *const T as *const U) }
 }
 
+#[expect(
+    unsafe_code,
+    reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+)]
 unsafe fn cast_mut<T, U>(a: &mut T) -> &mut U {
     assert_eq!(mem::size_of_val(a), mem::size_of::<U>());
     assert_eq!(mem::align_of_val(a), mem::align_of::<U>());
@@ -946,11 +1002,19 @@ impl fmt::Debug for Header {
 
 impl OldHeader {
     /// Views this as a normal `Header`
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_header(&self) -> &Header {
         unsafe { cast(self) }
     }
 
     /// Views this as a normal `Header`
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_header_mut(&mut self) -> &mut Header {
         unsafe { cast_mut(self) }
     }
@@ -1117,11 +1181,19 @@ impl UstarHeader {
     }
 
     /// Views this as a normal `Header`
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_header(&self) -> &Header {
         unsafe { cast(self) }
     }
 
     /// Views this as a normal `Header`
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_header_mut(&mut self) -> &mut Header {
         unsafe { cast_mut(self) }
     }
@@ -1288,11 +1360,19 @@ impl GnuHeader {
     }
 
     /// Views this as a normal `Header`
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_header(&self) -> &Header {
         unsafe { cast(self) }
     }
 
     /// Views this as a normal `Header`
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_header_mut(&mut self) -> &mut Header {
         unsafe { cast_mut(self) }
     }
@@ -1374,17 +1454,29 @@ impl fmt::Debug for GnuSparseHeader {
 
 impl GnuExtSparseHeader {
     /// Crates a new zero'd out sparse header entry.
+    #[expect(
+        unsafe_code,
+        reason = "the header is byte arrays, for which all zeros is valid"
+    )]
     pub fn new() -> Self {
         unsafe { mem::zeroed() }
     }
 
     /// Returns a view into this header as a byte array.
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_bytes(&self) -> &[u8; 512] {
         debug_assert_eq!(mem::size_of_val(self), 512);
         unsafe { &*(self as *const Self as *const [u8; 512]) }
     }
 
     /// Returns a view into this header as a byte array.
+    #[expect(
+        unsafe_code,
+        reason = "the header types share one 512-byte #[repr(C)] layout of byte arrays"
+    )]
     pub fn as_mut_bytes(&mut self) -> &mut [u8; 512] {
         debug_assert_eq!(mem::size_of_val(self), 512);
         unsafe { &mut *(self as *mut Self as *mut [u8; 512]) }

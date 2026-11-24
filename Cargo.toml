@@ -46,6 +46,7 @@ missing_debug_implementations = "warn"
 missing_docs = "warn"
 unnameable_types = "warn"
 unreachable_pub = "warn"
+unsafe_code = "deny"
 
 [lints.clippy]
 absolute_paths = "warn"

@@ -209,6 +209,10 @@ fn set_metadata_deterministic() {
 }
 
 #[test]
+#[expect(
+    unsafe_code,
+    reason = "builds a header of byte arrays, for which all zeros is valid"
+)]
 fn extended_numeric_format() {
     let mut h: GnuHeader = unsafe { mem::zeroed() };
     h.as_header_mut().set_size(42);
