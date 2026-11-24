@@ -54,14 +54,17 @@ allow_attributes_without_reason = "warn"
 expect_used = "warn"
 indexing_slicing = "warn"
 manual_let_else = "warn"
+mod_module_files = "warn"
 or_fun_call = "warn"
 panic = "warn"
+string_slice = "warn"
 todo = "warn"
 unimplemented = "warn"
 unreachable = "warn"
 unused_async = "warn"
 unwrap_used = "warn"
 use_self = "warn"
+wildcard_imports = "warn"
 
 [features]
 default = ["xattr", "runtime-smol"]

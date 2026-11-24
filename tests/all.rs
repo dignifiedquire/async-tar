@@ -1014,45 +1014,45 @@ async fn reading_sparse() {
     let mut entries = t!(ar.entries());
 
     let mut a = t!(entries.next().await.unwrap());
-    let mut s = String::new();
+    let mut s = Vec::new();
     assert_eq!(&*a.header().path_bytes(), b"sparse_begin.txt");
-    t!(a.read_to_string(&mut s).await);
-    assert_eq!(&s[..5], "test\n");
-    assert!(s[5..].chars().all(|x| x == '\u{0}'));
+    t!(a.read_to_end(&mut s).await);
+    assert_eq!(&s[..5], b"test\n");
+    assert!(s[5..].iter().all(|x| *x == 0));
 
     let mut a = t!(entries.next().await.unwrap());
-    let mut s = String::new();
+    let mut s = Vec::new();
     assert_eq!(&*a.header().path_bytes(), b"sparse_end.txt");
-    t!(a.read_to_string(&mut s).await);
-    assert!(s[..s.len() - 9].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[s.len() - 9..], "test_end\n");
+    t!(a.read_to_end(&mut s).await);
+    assert!(s[..s.len() - 9].iter().all(|x| *x == 0));
+    assert_eq!(&s[s.len() - 9..], b"test_end\n");
 
     let mut a = t!(entries.next().await.unwrap());
-    let mut s = String::new();
+    let mut s = Vec::new();
     assert_eq!(&*a.header().path_bytes(), b"sparse_ext.txt");
-    t!(a.read_to_string(&mut s).await);
-    assert!(s[..0x1000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x1000..0x1000 + 5], "text\n");
-    assert!(s[0x1000 + 5..0x3000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x3000..0x3000 + 5], "text\n");
-    assert!(s[0x3000 + 5..0x5000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x5000..0x5000 + 5], "text\n");
-    assert!(s[0x5000 + 5..0x7000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x7000..0x7000 + 5], "text\n");
-    assert!(s[0x7000 + 5..0x9000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x9000..0x9000 + 5], "text\n");
-    assert!(s[0x9000 + 5..0xb000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0xb000..0xb000 + 5], "text\n");
+    t!(a.read_to_end(&mut s).await);
+    assert!(s[..0x1000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x1000..0x1000 + 5], b"text\n");
+    assert!(s[0x1000 + 5..0x3000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x3000..0x3000 + 5], b"text\n");
+    assert!(s[0x3000 + 5..0x5000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x5000..0x5000 + 5], b"text\n");
+    assert!(s[0x5000 + 5..0x7000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x7000..0x7000 + 5], b"text\n");
+    assert!(s[0x7000 + 5..0x9000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x9000..0x9000 + 5], b"text\n");
+    assert!(s[0x9000 + 5..0xb000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0xb000..0xb000 + 5], b"text\n");
 
     let mut a = t!(entries.next().await.unwrap());
-    let mut s = String::new();
+    let mut s = Vec::new();
     assert_eq!(&*a.header().path_bytes(), b"sparse.txt");
-    t!(a.read_to_string(&mut s).await);
-    assert!(s[..0x1000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x1000..0x1000 + 6], "hello\n");
-    assert!(s[0x1000 + 6..0x2fa0].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x2fa0..0x2fa0 + 6], "world\n");
-    assert!(s[0x2fa0 + 6..0x4000].chars().all(|x| x == '\u{0}'));
+    t!(a.read_to_end(&mut s).await);
+    assert!(s[..0x1000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x1000..0x1000 + 6], b"hello\n");
+    assert!(s[0x1000 + 6..0x2fa0].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x2fa0..0x2fa0 + 6], b"world\n");
+    assert!(s[0x2fa0 + 6..0x4000].iter().all(|x| *x == 0));
 
     assert!(entries.next().await.is_none());
 }
@@ -1065,46 +1065,46 @@ async fn extract_sparse() {
     let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
     t!(ar.unpack(td.path()).await);
 
-    let mut s = String::new();
+    let mut s = Vec::new();
     t!(t!(File::open(td.path().join("sparse_begin.txt")).await)
-        .read_to_string(&mut s)
+        .read_to_end(&mut s)
         .await);
-    assert_eq!(&s[..5], "test\n");
-    assert!(s[5..].chars().all(|x| x == '\u{0}'));
+    assert_eq!(&s[..5], b"test\n");
+    assert!(s[5..].iter().all(|x| *x == 0));
 
     s.clear();
     t!(t!(File::open(td.path().join("sparse_end.txt")).await)
-        .read_to_string(&mut s)
+        .read_to_end(&mut s)
         .await);
-    assert!(s[..s.len() - 9].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[s.len() - 9..], "test_end\n");
+    assert!(s[..s.len() - 9].iter().all(|x| *x == 0));
+    assert_eq!(&s[s.len() - 9..], b"test_end\n");
 
     s.clear();
     t!(t!(File::open(td.path().join("sparse_ext.txt")).await)
-        .read_to_string(&mut s)
+        .read_to_end(&mut s)
         .await);
-    assert!(s[..0x1000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x1000..0x1000 + 5], "text\n");
-    assert!(s[0x1000 + 5..0x3000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x3000..0x3000 + 5], "text\n");
-    assert!(s[0x3000 + 5..0x5000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x5000..0x5000 + 5], "text\n");
-    assert!(s[0x5000 + 5..0x7000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x7000..0x7000 + 5], "text\n");
-    assert!(s[0x7000 + 5..0x9000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x9000..0x9000 + 5], "text\n");
-    assert!(s[0x9000 + 5..0xb000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0xb000..0xb000 + 5], "text\n");
+    assert!(s[..0x1000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x1000..0x1000 + 5], b"text\n");
+    assert!(s[0x1000 + 5..0x3000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x3000..0x3000 + 5], b"text\n");
+    assert!(s[0x3000 + 5..0x5000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x5000..0x5000 + 5], b"text\n");
+    assert!(s[0x5000 + 5..0x7000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x7000..0x7000 + 5], b"text\n");
+    assert!(s[0x7000 + 5..0x9000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x9000..0x9000 + 5], b"text\n");
+    assert!(s[0x9000 + 5..0xb000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0xb000..0xb000 + 5], b"text\n");
 
     s.clear();
     t!(t!(File::open(td.path().join("sparse.txt")).await)
-        .read_to_string(&mut s)
+        .read_to_end(&mut s)
         .await);
-    assert!(s[..0x1000].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x1000..0x1000 + 6], "hello\n");
-    assert!(s[0x1000 + 6..0x2fa0].chars().all(|x| x == '\u{0}'));
-    assert_eq!(&s[0x2fa0..0x2fa0 + 6], "world\n");
-    assert!(s[0x2fa0 + 6..0x4000].chars().all(|x| x == '\u{0}'));
+    assert!(s[..0x1000].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x1000..0x1000 + 6], b"hello\n");
+    assert!(s[0x1000 + 6..0x2fa0].iter().all(|x| *x == 0));
+    assert_eq!(&s[0x2fa0..0x2fa0 + 6], b"world\n");
+    assert!(s[0x2fa0 + 6..0x4000].iter().all(|x| *x == 0));
 }
 
 #[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]

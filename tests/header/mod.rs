@@ -161,7 +161,7 @@ fn set_path() {
     assert!(h.set_path(&long_name).is_err());
     assert!(h.set_path(&medium1).is_err());
     t!(h.set_path(&medium2));
-    assert_eq!(t!(h.path()).to_str(), Some(&medium2[..]));
+    assert_eq!(t!(h.path()).to_str(), Some(medium2.as_str()));
 }
 
 #[test]
