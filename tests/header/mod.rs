@@ -1,13 +1,13 @@
 use std::{
     fs::{self, File},
     io::{self, Write},
-    mem,
     path::Path,
     thread, time,
 };
 
 use async_tar::{GnuHeader, Header, HeaderMode};
 use tempfile::Builder;
+use zerocopy::FromZeros;
 
 #[test]
 fn default_gnu() {
@@ -209,12 +209,14 @@ fn set_metadata_deterministic() {
 }
 
 #[test]
-#[expect(
-    unsafe_code,
-    reason = "builds a header of byte arrays, for which all zeros is valid"
-)]
+#[should_panic(expected = "a header is 512 bytes")]
+fn from_byte_slice_panics_on_a_short_slice() {
+    Header::from_byte_slice(&[0; 511]);
+}
+
+#[test]
 fn extended_numeric_format() {
-    let mut h: GnuHeader = unsafe { mem::zeroed() };
+    let mut h = GnuHeader::new_zeroed();
     h.as_header_mut().set_size(42);
     assert_eq!(h.size, [48, 48, 48, 48, 48, 48, 48, 48, 48, 53, 50, 0]);
     h.as_header_mut().set_size(8_589_934_593);
