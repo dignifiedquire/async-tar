@@ -647,7 +647,7 @@ fn prepare_header(size: u64, entry_type: EntryType) -> Header {
     header.set_uid(0);
     header.set_gid(0);
     header.set_mtime(0);
-    // + 1 to be compliant with GNU tar
+    // The size counts the NUL written after the name, as GNU tar does.
     header.set_size(size + 1);
     header.set_entry_type(entry_type);
     header.set_cksum();

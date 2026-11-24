@@ -507,7 +507,8 @@ impl<R: Read + Unpin> Entries<R> {
             let is_recognized_header =
                 new_fields.header.as_gnu().is_some() || new_fields.header.as_ustar().is_some();
 
-            // GNU tar, bsdtar and Python read these headers as extensions.
+            // GNU tar, bsdtar and Python apply these headers to the next member even without
+            // ustar or GNU magic. This reader would unpack them as files, so it refuses them.
             let entry_type = new_fields.header.entry_type();
             let is_extension = entry_type.is_gnu_longname()
                 || entry_type.is_gnu_longlink()
@@ -861,7 +862,8 @@ fn poll_next_raw<R: Read + Unpin>(
         for extension in pax {
             let extension = extension.map_err(|_e| other("pax extensions invalid"))?;
 
-            // GNU tar and bsdtar expand these into another name and contents.
+            // GNU.sparse records are refused. GNU tar and bsdtar expand them into another name
+            // and contents, and this reader does not.
             if extension.key_bytes().starts_with(b"GNU.sparse.") {
                 return Poll::Ready(Some(Err(other("GNU sparse pax records are not supported"))));
             }
@@ -908,8 +910,8 @@ fn poll_next_raw<R: Read + Unpin>(
         }
     }
 
-    // POSIX stores no data for these types, and readers disagree on what a size
-    // on them means.
+    // These types store no data in POSIX, and readers disagree on what a size on them
+    // means, so a nonzero size is refused.
     let is_dataless = matches!(
         entry_type,
         EntryType::Link

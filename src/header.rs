@@ -212,8 +212,8 @@ impl Header {
     )]
     fn is_ustar(&self) -> bool {
         let ustar = unsafe { cast::<_, UstarHeader>(self) };
-        // Apache Ant writes NULs for the version, and GNU tar, bsdtar, Python
-        // and Go all read those headers as ustar.
+        // A ustar magic counts with version `00` or two NULs. Apache Ant writes the NULs, and
+        // GNU tar, bsdtar, Python and Go all read those headers as ustar.
         ustar.magic[..] == b"ustar\0"[..]
             && (ustar.version[..] == b"00"[..] || ustar.version[..] == b"\0\0"[..])
     }
