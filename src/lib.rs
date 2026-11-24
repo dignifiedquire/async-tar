@@ -27,6 +27,11 @@ compile_error!("Either `runtime-smol` or `runtime-tokio` feature must be enabled
 
 use std::io::Error;
 
+#[cfg(feature = "runtime-smol")]
+use futures_lite::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+#[cfg(feature = "runtime-tokio")]
+use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+
 pub use crate::{
     archive::{Archive, ArchiveBuilder, Entries},
     builder::Builder,
@@ -50,8 +55,34 @@ mod pax;
 #[macro_use]
 extern crate static_assertions;
 
+/// The largest chunk copied at once, since each file read or write may be a blocking call.
+const COPY_CHUNK_SIZE: usize = 128 * 1024;
+
 fn other(msg: &str) -> Error {
     Error::other(msg)
+}
+
+/// Copies `reader` to `writer` in chunks of up to 128 KiB, flushes `writer`, and returns the
+/// bytes copied.
+///
+/// The buffer is no larger than `size`, the number of bytes expected.
+async fn copy<R, W>(reader: &mut R, writer: &mut W, size: u64) -> io::Result<u64>
+where
+    R: AsyncRead + Unpin + ?Sized,
+    W: AsyncWrite + Unpin + ?Sized,
+{
+    let len = usize::try_from(size).map_or(COPY_CHUNK_SIZE, |size| size.clamp(1, COPY_CHUNK_SIZE));
+    let mut buf = vec![0; len];
+    let mut copied = 0;
+    loop {
+        let n = reader.read(&mut buf).await?;
+        if n == 0 {
+            writer.flush().await?;
+            return Ok(copied);
+        }
+        writer.write_all(&buf[..n]).await?;
+        copied += n as u64;
+    }
 }
 
 #[cfg(feature = "runtime-smol")]

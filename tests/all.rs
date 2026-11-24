@@ -2382,6 +2382,30 @@ async fn names_windows_reserves_are_rejected_on_windows() {
     }
 }
 
+#[cfg_attr(feature = "runtime-smol", macro_rules_attribute::apply(smol_macros::test!))]
+#[cfg_attr(feature = "runtime-tokio", tokio::test)]
+async fn unpacked_files_are_complete_when_unpack_returns() {
+    let data: Vec<u8> = (0..16 << 20).map(|i: u32| (i % 251) as u8).collect();
+    let mut header = Header::new_gnu();
+    t!(header.set_path("big.bin"));
+    header.set_size(data.len() as u64);
+    header.set_mtime(1_000_000_000);
+    header.set_mode(0o644);
+    header.set_cksum();
+    let mut tar = Vec::new();
+    push_block(&mut tar, header.as_bytes());
+    push_block(&mut tar, &data);
+    tar.extend(repeat_n(0u8, BLOCK * 2));
+
+    let td = t!(TempBuilder::new().prefix("async-tar").tempdir());
+    t!(Archive::new(&tar[..]).unpack(td.path()).await);
+
+    let path = td.path().join("big.bin");
+    assert!(t!(std::fs::read(&path)) == data);
+    let expected = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+    assert_eq!(t!(t!(std::fs::metadata(&path)).modified()), expected);
+}
+
 async fn is_rejected(tar: &[u8]) -> bool {
     let mut entries = t!(Archive::new(tar).entries());
     while let Some(entry) = entries.next().await {

@@ -6,7 +6,7 @@ use std::{
     collections::VecDeque,
     ffi::OsStr,
     fmt, marker,
-    path::{Component, Path, PathBuf},
+    path::{Component, Path},
     pin::Pin,
     task::{Context, Poll},
     time::{Duration, UNIX_EPOCH},
@@ -287,7 +287,16 @@ impl<R: Read + Unpin> Entry<R> {
     /// # Ok(()) }) }
     /// ```
     pub async fn unpack_in<P: AsRef<Path>>(&mut self, dst: P) -> io::Result<bool> {
-        self.fields.unpack_in(dst.as_ref()).await
+        self.fields.unpack_in(dst.as_ref(), None).await
+    }
+
+    /// Unpacks this entry into `dst`, reusing `canon_dst` as its canonical form when given.
+    pub(crate) async fn unpack_in_canonical(
+        &mut self,
+        dst: &Path,
+        canon_dst: Option<&Path>,
+    ) -> io::Result<bool> {
+        self.fields.unpack_in(dst, canon_dst).await
     }
 
     /// Indicate whether extended file attributes (xattrs on Unix) are preserved
@@ -452,7 +461,7 @@ impl<R: Read + Unpin> EntryFields<R> {
         Ok(Some(pax_extensions(self.pax_extensions.as_ref().unwrap())))
     }
 
-    async fn unpack_in(&mut self, dst: &Path) -> io::Result<bool> {
+    async fn unpack_in(&mut self, dst: &Path, canon_dst: Option<&Path>) -> io::Result<bool> {
         // A metadata entry unpacks to no file and makes no directories above its name.
         if self.header.entry_type().is_metadata() {
             return Ok(true);
@@ -516,13 +525,23 @@ impl<R: Read + Unpin> EntryFields<R> {
             None => return Ok(false),
         };
 
-        self.ensure_dir_created(dst, parent)
+        let canon_dst = match canon_dst {
+            Some(canon_dst) => Cow::Borrowed(canon_dst),
+            None => Cow::Owned(fs_canonicalize(dst).await.map_err(|err| {
+                Error::new(
+                    err.kind(),
+                    format!("{} while canonicalizing {}", err, dst.display()),
+                )
+            })?),
+        };
+
+        self.ensure_dir_created(&canon_dst, parent)
             .await
             .map_err(|e| TarError::new(&format!("failed to create `{}`", parent.display()), e))?;
 
-        let canon_target = self.validate_inside_dst(dst, parent).await?;
+        self.validate_inside_dst(&canon_dst, parent).await?;
 
-        self.unpack(Some(&canon_target), &file_dst)
+        self.unpack(Some(&canon_dst), &file_dst)
             .await
             .map_err(|e| TarError::new(&format!("failed to unpack `{}`", file_dst.display()), e))?;
 
@@ -703,7 +722,7 @@ impl<R: Read + Unpin> EntryFields<R> {
                 match io {
                     EntryIo::Data(mut d) => {
                         let expected = d.limit();
-                        if io::copy(&mut d, &mut f).await? != expected {
+                        if crate::copy(&mut d, &mut f, expected).await? != expected {
                             return Err(other("failed to write entire file"));
                         }
                     }
@@ -897,7 +916,7 @@ impl<R: Read + Unpin> EntryFields<R> {
         }
     }
 
-    async fn ensure_dir_created(&self, dst: &Path, dir: &Path) -> io::Result<()> {
+    async fn ensure_dir_created(&self, canon_dst: &Path, dir: &Path) -> io::Result<()> {
         let mut ancestor = dir;
         let mut dirs_to_create = Vec::new();
 
@@ -915,14 +934,14 @@ impl<R: Read + Unpin> EntryFields<R> {
         }
         for ancestor in dirs_to_create.into_iter().rev() {
             if let Some(parent) = ancestor.parent() {
-                self.validate_inside_dst(dst, parent).await?;
+                self.validate_inside_dst(canon_dst, parent).await?;
             }
             fs::create_dir(ancestor).await?;
         }
         Ok(())
     }
 
-    async fn validate_inside_dst(&self, dst: &Path, file_dst: &Path) -> io::Result<PathBuf> {
+    async fn validate_inside_dst(&self, canon_dst: &Path, file_dst: &Path) -> io::Result<()> {
         // Abort if target (canonical) parent is outside of `dst`
         let canon_parent = fs_canonicalize(file_dst).await.map_err(|err| {
             Error::new(
@@ -930,24 +949,18 @@ impl<R: Read + Unpin> EntryFields<R> {
                 format!("{} while canonicalizing {}", err, file_dst.display()),
             )
         })?;
-        let canon_target = fs_canonicalize(dst).await.map_err(|err| {
-            Error::new(
-                err.kind(),
-                format!("{} while canonicalizing {}", err, dst.display()),
-            )
-        })?;
-        if !canon_parent.starts_with(&canon_target) {
+        if !canon_parent.starts_with(canon_dst) {
             let err = TarError::new(
                 &format!(
                     "trying to unpack outside of destination path: {}",
-                    canon_target.display()
+                    canon_dst.display()
                 ),
                 // TODO: use ErrorKind::InvalidInput here? (minor breaking change)
                 Error::other("Invalid argument"),
             );
             return Err(err.into());
         }
-        Ok(canon_target)
+        Ok(())
     }
 }
 
