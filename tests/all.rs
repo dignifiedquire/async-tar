@@ -2488,6 +2488,9 @@ async fn base256_size_beyond_64_bits_is_rejected() {
     let too_large = build([0x80, 0, 0, 1, 0, 0, 0, 0, 0, 0, 2, 0]);
     assert!(is_rejected(&too_large).await);
 
+    let flag_with_bits = build([0x81, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0]);
+    assert!(is_rejected(&flag_with_bits).await);
+
     let fits = build([0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0]);
     assert_eq!(read_entries(&fits[..]).await[0].1.len(), BLOCK);
 }

@@ -768,15 +768,12 @@ impl Header {
     }
 
     fn calculate_cksum(&self) -> u32 {
-        let old = self.as_old();
-        let start = old as *const _ as usize;
-        let cksum_start = old.cksum.as_ptr() as *const _ as usize;
-        let offset = cksum_start - start;
-        let len = old.cksum.len();
-        self.bytes[0..offset]
+        const START: usize = mem::offset_of!(OldHeader, cksum);
+        const END: usize = mem::offset_of!(OldHeader, linkflag);
+        self.bytes[..START]
             .iter()
-            .chain(iter::repeat_n(&b' ', len))
-            .chain(&self.bytes[offset + len..])
+            .chain(iter::repeat_n(&b' ', END - START))
+            .chain(&self.bytes[END..])
             .fold(0, |a, b| a + (*b as u32))
     }
 
@@ -1101,7 +1098,13 @@ impl UstarHeader {
                     format!("{} when setting path for {}", err, self.path_lossy()),
                 )
             })?;
-            let path = bytes2path(Cow::Borrowed(&bytes[prefixlen + 1..]))?;
+            let Some(name) = bytes.get(prefixlen + 1..) else {
+                return Err(other(&format!(
+                    "path cannot be split to be inserted into archive: {}",
+                    path.display()
+                )));
+            };
+            let path = bytes2path(Cow::Borrowed(name))?;
             copy_path_into(&mut self.name, &path, false).map_err(|err| {
                 io::Error::new(
                     err.kind(),
@@ -1547,7 +1550,7 @@ fn size_from(field: &[u8]) -> io::Result<u64> {
     if field.iter().all(|b| *b == 0) {
         return Ok(0);
     }
-    let is_octal = field[0] & 0x80 == 0;
+    let is_octal = field.first().is_some_and(|b| b & 0x80 == 0);
     if is_octal && (field.contains(&b'+') || !matches!(field.last(), Some(0 | b' '))) {
         return Err(other("size field has a sign or no terminator"));
     }
@@ -1557,10 +1560,9 @@ fn size_from(field: &[u8]) -> io::Result<u64> {
 // Wrapper to figure out if we should read the header field in binary (numeric
 // extension) or octal (standard encoding).
 fn num_field_wrapper_from(src: &[u8]) -> io::Result<u64> {
-    if src[0] & 0x80 == 0 {
-        octal_from(src)
-    } else {
-        numeric_extended_from(src)
+    match src.first() {
+        Some(b) if b & 0x80 != 0 => numeric_extended_from(src),
+        _ => octal_from(src),
     }
 }
 
@@ -1576,34 +1578,30 @@ fn numeric_extended_into(dst: &mut [u8], src: u64) {
     ) {
         *slot = val;
     }
-    dst[0] |= 0x80;
+    if let Some(first) = dst.first_mut() {
+        *first |= 0x80;
+    }
 }
 
 fn numeric_extended_from(src: &[u8]) -> io::Result<u64> {
-    let mut dst: u64 = 0;
-    let mut b_to_skip = 1;
-    if src.len() == 8 {
-        // read first byte without extension flag bit
-        dst = (src[0] ^ 0x80) as u64;
-    } else {
-        // only read last 8 bytes
-        b_to_skip = src.len() - 8;
-        if src[0] != 0x80 || src[1..b_to_skip].iter().any(|b| *b != 0) {
-            return Err(other("base-256 number does not fit in 64 bits"));
-        }
+    let Some((flag, rest)) = src.split_first() else {
+        return Err(other("base-256 number is empty"));
+    };
+    // An 8-byte field keeps the top bits after its flag bit. A longer one keeps the
+    // number in its last 8 bytes, after a bare flag byte and zeros.
+    let padding = rest.len().saturating_sub(8);
+    if src.len() != 8 && (*flag != 0x80 || rest.iter().take(padding).any(|b| *b != 0)) {
+        return Err(other("base-256 number does not fit in 64 bits"));
     }
-    for byte in src.iter().skip(b_to_skip) {
-        dst <<= 8;
-        dst |= *byte as u64;
-    }
-    Ok(dst)
+    let number = rest
+        .iter()
+        .skip(padding)
+        .fold(u64::from(flag ^ 0x80), |n, b| (n << 8) | u64::from(*b));
+    Ok(number)
 }
 
 fn truncate(slice: &[u8]) -> &[u8] {
-    match slice.iter().position(|i| *i == 0) {
-        Some(i) => &slice[..i],
-        None => slice,
-    }
+    slice.split(|b| *b == 0).next().unwrap_or(slice)
 }
 
 /// Copies `bytes` into the `slot` provided, returning an error if the `bytes`
@@ -1675,7 +1673,10 @@ fn copy_path_into_inner(
     fn copy(slot: &mut &mut [u8], bytes: &[u8]) -> io::Result<()> {
         copy_into(slot, bytes)?;
         let tmp = mem::take(slot);
-        *slot = &mut tmp[bytes.len()..];
+        let Some((_, rest)) = tmp.split_at_mut_checked(bytes.len()) else {
+            return Err(other("provided value is too long"));
+        };
+        *slot = rest;
         Ok(())
     }
 }

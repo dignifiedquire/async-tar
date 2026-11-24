@@ -553,10 +553,9 @@ where
     }
 
     // Pad with zeros if necessary.
-    let buf = [0; 512];
-    let remaining = 512 - (len % 512);
-    if remaining < 512 {
-        dst.write_all(&buf[..remaining as usize]).await?;
+    let remaining = (512 - len % 512) % 512;
+    if let Some(zeros) = [0; 512].get(..remaining as usize) {
+        dst.write_all(zeros).await?;
     }
 
     Ok(())
@@ -641,7 +640,9 @@ async fn append_dir<W: Write + Unpin + ?Sized>(
 fn prepare_header(size: u64, entry_type: EntryType) -> Header {
     let mut header = Header::new_gnu();
     let name = b"././@LongLink";
-    header.as_old_mut().name[..name.len()].clone_from_slice(&name[..]);
+    for (slot, byte) in header.as_old_mut().name.iter_mut().zip(name) {
+        *slot = *byte;
+    }
     header.set_mode(0o644);
     header.set_uid(0);
     header.set_gid(0);
@@ -667,13 +668,13 @@ async fn prepare_header_path<W: Write + Unpin + ?Sized>(
         let max = header.as_old().name.len();
         //  Since e isn't specific enough to let us know the path is indeed too
         //  long, verify it first before using the extension.
-        if data.len() < max {
+        let Some(truncated) = data.get(..max) else {
             return Err(e);
-        }
+        };
         // Truncate the path to store in the header we're about to emit to
         // ensure we've got something at least mentioned. It is checked before
         // the long name is written, so a rejected path leaves no long name.
-        let path = bytes2path(Cow::Borrowed(&data[..max]))?;
+        let path = bytes2path(Cow::Borrowed(truncated))?;
         header.set_truncated_path_for_gnu_header(&path)?;
         let header2 = prepare_header(data.len() as u64, EntryType::GNULongName);
         // null-terminated string

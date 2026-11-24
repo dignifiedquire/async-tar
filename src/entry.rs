@@ -404,11 +404,7 @@ impl<R: Read + Unpin> EntryFields<R> {
 
     pub(crate) fn path_bytes(&self) -> Cow<'_, [u8]> {
         if let Some(ref bytes) = self.long_pathname {
-            if let Some(&0) = bytes.last() {
-                Cow::Borrowed(&bytes[..bytes.len() - 1])
-            } else {
-                Cow::Borrowed(bytes)
-            }
+            Cow::Borrowed(bytes.strip_suffix(&[0]).unwrap_or(bytes))
         } else {
             if let Some(field) = self.pax_value(b"path") {
                 return Cow::Borrowed(field);
@@ -441,13 +437,7 @@ impl<R: Read + Unpin> EntryFields<R> {
 
     pub(crate) fn link_name_bytes(&self) -> Option<Cow<'_, [u8]>> {
         match self.long_linkname {
-            Some(ref bytes) => {
-                if let Some(&0) = bytes.last() {
-                    Some(Cow::Borrowed(&bytes[..bytes.len() - 1]))
-                } else {
-                    Some(Cow::Borrowed(bytes))
-                }
-            }
+            Some(ref bytes) => Some(Cow::Borrowed(bytes.strip_suffix(&[0]).unwrap_or(bytes))),
             None => match self.pax_value(b"linkpath") {
                 Some(field) => Some(Cow::Borrowed(field)),
                 None => self.header.link_name_bytes(),
@@ -960,13 +950,8 @@ impl<R: Read + Unpin> EntryFields<R> {
             let exts = exts
                 .filter_map(Result::ok)
                 .filter_map(|e| {
-                    let key = e.key_bytes();
-                    let prefix = b"SCHILY.xattr.";
-                    if key.starts_with(prefix) {
-                        Some((&key[prefix.len()..], e))
-                    } else {
-                        None
-                    }
+                    let key = e.key_bytes().strip_prefix(b"SCHILY.xattr.")?;
+                    Some((key, e))
                 })
                 .map(|(key, e)| (OsStr::from_bytes(key), e.value_bytes()));
 

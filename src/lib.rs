@@ -119,7 +119,10 @@ where
             writer.flush().await?;
             return Ok(copied);
         }
-        writer.write_all(&buf[..n]).await?;
+        let Some(read) = buf.get(..n) else {
+            return Err(other("a read returned more bytes than it was given"));
+        };
+        writer.write_all(read).await?;
         copied += n as u64;
     }
 }

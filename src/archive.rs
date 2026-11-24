@@ -1,7 +1,6 @@
 #[cfg(feature = "runtime-tokio")]
 use std::mem::MaybeUninit;
 use std::{
-    cmp,
     collections::VecDeque,
     iter, mem,
     path::{Path, PathBuf},
@@ -1201,8 +1200,8 @@ fn poll_try_read_all<R: Read + Unpin>(
     buf: &mut [u8],
     pos: &mut usize,
 ) -> Poll<io::Result<bool>> {
-    while *pos < buf.len() {
-        match ready!(Pin::new(&mut source).poll_read(cx, &mut buf[*pos..])) {
+    while let Some(rest) = buf.get_mut(*pos..).filter(|rest| !rest.is_empty()) {
+        match ready!(Pin::new(&mut source).poll_read(cx, rest)) {
             Ok(0) => {
                 if *pos == 0 {
                     return Poll::Ready(Ok(false));
@@ -1226,8 +1225,8 @@ fn poll_try_read_all<R: Read + Unpin>(
     buf: &mut [u8],
     pos: &mut usize,
 ) -> Poll<io::Result<bool>> {
-    while *pos < buf.len() {
-        let mut read_buf = io::ReadBuf::new(&mut buf[*pos..]);
+    while let Some(rest) = buf.get_mut(*pos..).filter(|rest| !rest.is_empty()) {
+        let mut read_buf = io::ReadBuf::new(rest);
         let start = read_buf.filled().len();
         match ready!(Pin::new(&mut source).poll_read(cx, &mut read_buf)) {
             Ok(()) => {
@@ -1259,8 +1258,8 @@ fn poll_skip<R: Read + Unpin>(
 ) -> Poll<io::Result<()>> {
     let mut buf = [0u8; 4096 * 8];
     while amt > 0 {
-        let n = cmp::min(amt, buf.len() as u64);
-        match ready!(Pin::new(&mut source).poll_read(cx, &mut buf[..n as usize])) {
+        let mut limited = (&mut source).take(amt);
+        match ready!(Pin::new(&mut limited).poll_read(cx, &mut buf)) {
             Ok(0) => {
                 return Poll::Ready(Err(other("unexpected EOF during skip")));
             }
@@ -1284,8 +1283,9 @@ fn poll_skip<R: Read + Unpin>(
     // The skipped bytes are never read, so the buffer is left uninitialized.
     let mut buf = [MaybeUninit::<u8>::uninit(); 4096 * 8];
     while amt > 0 {
-        let n = cmp::min(amt, buf.len() as u64);
-        let mut read_buf = io::ReadBuf::uninit(&mut buf[..n as usize]);
+        let n = amt.min(buf.len() as u64) as usize;
+        let mut whole = io::ReadBuf::uninit(&mut buf);
+        let mut read_buf = whole.take(n);
         let start = read_buf.filled().len();
         match ready!(Pin::new(&mut source).poll_read(cx, &mut read_buf)) {
             Ok(()) => {
