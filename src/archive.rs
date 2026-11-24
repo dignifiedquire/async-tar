@@ -1021,7 +1021,7 @@ fn poll_parse_sparse_header<R: Read + Unpin>(
     // read resumes the headers without dropping the blocks of earlier ones.
     while ext_headers
         .last()
-        .map_or(gnu.is_extended(), |ext| ext.is_extended())
+        .map_or_else(|| gnu.is_extended(), |ext| ext.is_extended())
     {
         let max_map_size = archive.inner.lock().unwrap().max_gnu_sparse_map_size;
         if (ext_headers.len() as u64 + 1).saturating_mul(512) > max_map_size {
